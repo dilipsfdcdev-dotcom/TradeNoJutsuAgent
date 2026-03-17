@@ -1,0 +1,54 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: xauusd_db
+    environment:
+      POSTGRES_DB: xauusd_agent
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/01_init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d xauusd_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: xauusd_agent
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - MT5_LOGIN=${MT5_LOGIN}
+      - MT5_PASSWORD=${MT5_PASSWORD}
+      - MT5_SERVER=${MT5_SERVER}
+      - MT5_PATH=${MT5_PATH}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=xauusd_agent
+      - DB_USER=agent
+      - DB_PASSWORD=${DB_PASSWORD:-changeme}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - NEWSAPI_KEY=${NEWSAPI_KEY}
+    volumes:
+      - ./xauusd_agent/config:/app/xauusd_agent/config
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./backtest_data:/app/backtest_data
+      - ./reports:/app/reports
+    restart: unless-stopped
+
+volumes:
+  pgdata:

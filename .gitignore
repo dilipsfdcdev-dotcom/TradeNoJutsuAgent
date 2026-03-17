@@ -1,0 +1,45 @@
+# Environment
+.env
+xauusd_agent/config/.env
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Models (large files)
+models/*.zip
+models/*.onnx
+models/*.txt
+*.pkl
+
+# Data
+backtest_data/
+*.parquet
+*.h5
+
+# Logs
+logs/
+*.log
+
+# Reports
+reports/*.html
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+pgdata/
