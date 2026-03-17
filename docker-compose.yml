@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: xauusd_agent
       POSTGRES_USER: agent
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-Saikumar@226}
     ports:
       - "5432:5432"
     volumes:
@@ -37,7 +37,7 @@ services:
       - DB_PORT=5432
       - DB_NAME=xauusd_agent
       - DB_USER=agent
-      - DB_PASSWORD=${DB_PASSWORD:-changeme}
+      - DB_PASSWORD=${DB_PASSWORD:-Saikumar@226}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
