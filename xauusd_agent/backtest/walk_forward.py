@@ -1,5 +1,5 @@
 """
-Walk-forward optimisation and validation for the XAUUSD trading agent.
+Walk-forward validation for the XAUUSD trading agent.
 
 Implements a rolling 15-month train / 2-month test scheme that produces
 at least 6 non-overlapping test folds across a 2+ year dataset.  Each fold
@@ -10,57 +10,48 @@ to gate the strategy for live deployment.
 from __future__ import annotations
 
 import copy
-from dataclasses import asdict
 from datetime import timedelta
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
-from xauusd_agent.backtest.nautilus_backtest import BacktestResult, XAUUSDBacktester
+from xauusd_agent.backtest.nautilus_backtest import XAUUSDBacktester
 from xauusd_agent.infra.logger import get_logger
 
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# Default pass/fail thresholds
+# Default go-live thresholds
 # ---------------------------------------------------------------------------
 
 _DEFAULT_THRESHOLDS: dict[str, float] = {
-    "win_rate": 0.50,          # > 50 %
-    "profit_factor": 1.4,      # > 1.4
-    "max_drawdown_pct": 0.18,  # < 18 %
-    "sharpe_ratio": 1.0,       # > 1.0
-    "min_trades": 300,         # across all folds
-    "ratchet_save_pct": 0.15,  # > 15 %
+    "win_rate": 50.0,           # > 50 %
+    "profit_factor": 1.4,       # > 1.4
+    "max_drawdown_pct": 18.0,   # < 18 %
+    "sharpe_ratio": 1.0,        # > 1.0
+    "min_trades": 300,          # across all folds
+    "ratchet_saves_pct": 15.0,  # > 15 %
 }
 
 
-class WalkForwardOptimizer:
+class WalkForwardValidator:
     """15-month train / 2-month test walk-forward validation."""
 
-    def __init__(
-        self,
-        settings: dict,
-        initial_balance: float = 10_000.0,
-    ) -> None:
+    def __init__(self, settings: dict) -> None:
         self.settings = settings
-        self.initial_balance = initial_balance
-        self.thresholds = {
-            **_DEFAULT_THRESHOLDS,
-            **settings.get("thresholds", {}),
-        }
+        self.train_months: int = settings.get("train_months", 15)
+        self.test_months: int = settings.get("test_months", 2)
+        self.initial_balance: float = settings.get("initial_balance", 10_000.0)
 
     # ------------------------------------------------------------------
     # Fold generation
     # ------------------------------------------------------------------
 
     def generate_folds(
-        self,
-        all_tf_data: dict[str, pd.DataFrame],
-        train_months: int = 15,
-        test_months: int = 2,
+        self, start_date: str, end_date: str,
     ) -> list[dict]:
-        """Generate walk-forward folds from the data.
+        """Generate walk-forward folds.
 
         Each fold is a dict::
 
@@ -72,34 +63,26 @@ class WalkForwardOptimizer:
                 "test_end": pd.Timestamp,
             }
 
-        The folds are anchored on the M3 timeframe date range and step
-        forward by ``test_months`` each iteration, ensuring a minimum of
-        6 non-overlapping test windows.
+        The folds step forward by ``test_months`` each iteration,
+        ensuring a minimum of 6 non-overlapping test windows when the
+        dataset is long enough.
 
         Parameters
         ----------
-        all_tf_data:
-            Multi-TF data dict (must contain ``"M3"``).
-        train_months:
-            Length of the training window in months.
-        test_months:
-            Length of the out-of-sample test window in months.
+        start_date / end_date:
+            ISO-8601 date strings (``"YYYY-MM-DD"``) bounding the full
+            dataset.
 
         Returns
         -------
         list[dict]
             Ordered list of fold descriptors.
         """
-        m3 = all_tf_data.get("M3")
-        if m3 is None or m3.empty:
-            logger.error("Cannot generate folds: no M3 data")
-            return []
+        data_start = pd.Timestamp(start_date, tz="UTC")
+        data_end = pd.Timestamp(end_date, tz="UTC")
 
-        data_start = m3.index.min()
-        data_end = m3.index.max()
-
-        train_delta = timedelta(days=train_months * 30)
-        test_delta = timedelta(days=test_months * 30)
+        train_delta = timedelta(days=self.train_months * 30)
+        test_delta = timedelta(days=self.test_months * 30)
 
         folds: list[dict] = []
         fold_num = 1
@@ -115,15 +98,13 @@ class WalkForwardOptimizer:
             if test_end > data_end:
                 break
 
-            folds.append(
-                {
-                    "fold_num": fold_num,
-                    "train_start": train_start,
-                    "train_end": train_end,
-                    "test_start": test_start,
-                    "test_end": test_end,
-                }
-            )
+            folds.append({
+                "fold_num": fold_num,
+                "train_start": train_start,
+                "train_end": train_end,
+                "test_start": test_start,
+                "test_end": test_end,
+            })
 
             fold_num += 1
             cursor += test_delta  # step forward by test window size
@@ -131,11 +112,8 @@ class WalkForwardOptimizer:
         logger.info(
             "Generated %d walk-forward folds (train=%dm, test=%dm) "
             "from %s to %s",
-            len(folds),
-            train_months,
-            test_months,
-            data_start.date(),
-            data_end.date(),
+            len(folds), self.train_months, self.test_months,
+            start_date, end_date,
         )
 
         if len(folds) < 6:
@@ -152,33 +130,56 @@ class WalkForwardOptimizer:
     # ------------------------------------------------------------------
 
     def run_walk_forward(
-        self,
-        all_tf_data: dict[str, pd.DataFrame],
-    ) -> dict[str, Any]:
+        self, all_tf_data: dict[str, pd.DataFrame],
+    ) -> dict:
         """Run backtest on each fold and aggregate results.
+
+        For each fold:
+
+        1. Split data into train/test periods (train data is included
+           for indicator warm-up, but only test-period trades count).
+        2. Run backtest on the combined window.
+        3. Filter trades to only those opened during the test window.
+        4. Collect results per fold.
+
+        Parameters
+        ----------
+        all_tf_data:
+            Multi-TF data dict as returned by
+            :meth:`BacktestDataLoader.load_all_timeframes`.
 
         Returns
         -------
         dict
-            ``folds``       – list of :class:`BacktestResult` (one per fold)
-            ``aggregate``   – combined metrics across all folds
-            ``passed``      – bool, True when all thresholds met
-            ``thresholds``  – the threshold dict used for evaluation
-            ``fold_details`` – per-fold summary dicts
+            ``folds``          -- list of per-fold result dicts
+            ``aggregate``      -- combined metrics across all folds
+            ``go_live``        -- output of :meth:`check_go_live_thresholds`
         """
-        folds = self.generate_folds(all_tf_data)
+        # Determine date range from M3 data
+        m3 = all_tf_data.get("M3", pd.DataFrame())
+        if m3.empty:
+            logger.error("No M3 data; cannot run walk-forward")
+            return {
+                "folds": [],
+                "aggregate": {},
+                "go_live": {"passed": False, "checks": {}},
+            }
+
+        start_date = str(m3.index.min().date())
+        end_date = str(m3.index.max().date())
+
+        folds = self.generate_folds(start_date, end_date)
         if not folds:
             logger.error("No folds generated; aborting walk-forward")
             return {
                 "folds": [],
-                "aggregate": BacktestResult(),
-                "passed": False,
-                "thresholds": self.thresholds,
-                "fold_details": [],
+                "aggregate": {},
+                "go_live": {"passed": False, "checks": {}},
             }
 
-        fold_results: list[BacktestResult] = []
-        fold_details: list[dict] = []
+        fold_results: list[dict] = []
+        all_trades: list[dict] = []
+        all_equity: list[dict] = []
 
         for fold in folds:
             logger.info(
@@ -188,96 +189,183 @@ class WalkForwardOptimizer:
                 fold["test_end"].date(),
             )
 
-            # We backtest on the TEST window, but supply full data up to
-            # test_end so that HTF indicators have sufficient warm-up from
-            # the training period.
-            test_data = self._split_data(
-                all_tf_data,
-                fold["train_start"],
-                fold["test_end"],
+            # Supply full data from train_start to test_end so HTF
+            # indicators have sufficient warm-up from training period.
+            fold_data = self._split_data(
+                all_tf_data, fold["train_start"], fold["test_end"],
             )
 
-            # Mark where the test period starts so we only count trades
-            # opened during the test window.
             backtester = XAUUSDBacktester(
                 settings=copy.deepcopy(self.settings),
                 initial_balance=self.initial_balance,
             )
 
-            result = backtester.run(test_data)
+            result = backtester.run(fold_data)
 
             # Filter trades to only those within the test window
             test_start_ts = fold["test_start"]
             test_trades = [
-                t for t in result.trades
+                t for t in result.get("trades", [])
                 if pd.Timestamp(t["open_time"]) >= test_start_ts
             ]
-            result.total_trades = len(test_trades)
-            result.wins = sum(1 for t in test_trades if t["pnl"] > 0)
-            result.losses = sum(1 for t in test_trades if t["pnl"] <= 0)
-            result.win_rate = (
-                result.wins / result.total_trades
-                if result.total_trades > 0
-                else 0.0
-            )
 
-            fold_results.append(result)
-            fold_details.append(
-                {
-                    "fold_num": fold["fold_num"],
-                    "test_start": str(fold["test_start"].date()),
-                    "test_end": str(fold["test_end"].date()),
-                    "trades": result.total_trades,
-                    "win_rate": round(result.win_rate, 4),
-                    "profit_factor": round(result.profit_factor, 2),
-                    "total_profit": round(result.total_profit, 2),
-                    "max_drawdown_pct": round(result.max_drawdown_pct, 4),
-                    "sharpe_ratio": round(result.sharpe_ratio, 2),
-                    "ratchet_save_pct": round(result.ratchet_save_pct, 4),
-                }
-            )
+            # Recompute metrics for test-only trades
+            test_winners = [t for t in test_trades if t["profit_usd"] > 0]
+            test_losers = [t for t in test_trades if t["profit_usd"] <= 0]
+            gross_profit = sum(t["profit_usd"] for t in test_winners)
+            gross_loss = abs(sum(t["profit_usd"] for t in test_losers))
+
+            fold_result = {
+                "fold_num": fold["fold_num"],
+                "test_start": str(fold["test_start"].date()),
+                "test_end": str(fold["test_end"].date()),
+                "total_trades": len(test_trades),
+                "winners": len(test_winners),
+                "losers": len(test_losers),
+                "win_rate": round(
+                    len(test_winners) / len(test_trades) * 100, 2,
+                ) if test_trades else 0.0,
+                "profit_factor": round(
+                    gross_profit / gross_loss, 3,
+                ) if gross_loss > 0 else float("inf"),
+                "total_pnl": round(sum(t["profit_usd"] for t in test_trades), 2),
+                "max_drawdown_pct": result.get("max_drawdown_pct", 0.0),
+                "sharpe_ratio": result.get("sharpe_ratio", 0.0),
+                "ratchet_saves_pct": result.get("ratchet_saves_pct", 0.0),
+                "trades": test_trades,
+                "equity_curve": result.get("equity_curve", []),
+            }
+
+            fold_results.append(fold_result)
+            all_trades.extend(test_trades)
+            all_equity.extend(result.get("equity_curve", []))
 
             logger.info(
-                "Fold %d complete: %d trades, WR=%.1f%%, PF=%.2f, DD=%.1f%%",
+                "Fold %d complete: %d trades, WR=%.1f%%, PF=%.2f",
                 fold["fold_num"],
-                result.total_trades,
-                result.win_rate * 100,
-                result.profit_factor,
-                result.max_drawdown_pct * 100,
+                fold_result["total_trades"],
+                fold_result["win_rate"],
+                fold_result["profit_factor"],
             )
 
-        # Aggregate metrics
-        aggregate = self._aggregate_results(fold_results)
+        # Aggregate metrics across all folds
+        aggregate = self._aggregate_results(fold_results, all_trades, all_equity)
 
-        # Pass/fail evaluation
-        passed = self._evaluate_thresholds(aggregate)
+        # Go-live evaluation
+        go_live = self.check_go_live_thresholds(aggregate)
 
         logger.info(
             "Walk-forward %s: %d total trades, WR=%.1f%%, PF=%.2f, "
-            "DD=%.1f%%, Sharpe=%.2f, Ratchet saves=%.1f%%",
-            "PASSED" if passed else "FAILED",
-            aggregate.total_trades,
-            aggregate.win_rate * 100,
-            aggregate.profit_factor,
-            aggregate.max_drawdown_pct * 100,
-            aggregate.sharpe_ratio,
-            aggregate.ratchet_save_pct * 100,
+            "DD=%.1f%%, Sharpe=%.2f",
+            "PASSED" if go_live["passed"] else "FAILED",
+            aggregate.get("total_trades", 0),
+            aggregate.get("win_rate", 0),
+            aggregate.get("profit_factor", 0),
+            aggregate.get("max_drawdown_pct", 0),
+            aggregate.get("sharpe_ratio", 0),
         )
 
         return {
             "folds": fold_results,
             "aggregate": aggregate,
-            "passed": passed,
-            "thresholds": self.thresholds,
-            "fold_details": fold_details,
+            "go_live": go_live,
         }
+
+    # ------------------------------------------------------------------
+    # Go-live threshold check
+    # ------------------------------------------------------------------
+
+    def check_go_live_thresholds(self, results: dict) -> dict:
+        """Check aggregate results against go-live criteria.
+
+        Criteria:
+            - win_rate > 50%
+            - profit_factor > 1.4
+            - max_drawdown < 18%
+            - sharpe > 1.0
+            - min_trades > 300
+            - ratchet_saves > 15%
+
+        Parameters
+        ----------
+        results:
+            Aggregate results dict from :meth:`run_walk_forward`.
+
+        Returns
+        -------
+        dict
+            ``passed``  -- bool, True when all thresholds are met.
+            ``checks``  -- dict of ``{criterion: {value, threshold, passed}}``.
+        """
+        thresholds = {**_DEFAULT_THRESHOLDS, **self.settings.get("thresholds", {})}
+
+        checks: dict[str, dict] = {}
+
+        # win_rate > 50%
+        wr = results.get("win_rate", 0.0)
+        checks["win_rate"] = {
+            "value": wr,
+            "threshold": thresholds["win_rate"],
+            "passed": wr > thresholds["win_rate"],
+        }
+
+        # profit_factor > 1.4
+        pf = results.get("profit_factor", 0.0)
+        checks["profit_factor"] = {
+            "value": pf,
+            "threshold": thresholds["profit_factor"],
+            "passed": pf > thresholds["profit_factor"],
+        }
+
+        # max_drawdown < 18%
+        dd = results.get("max_drawdown_pct", 100.0)
+        checks["max_drawdown_pct"] = {
+            "value": dd,
+            "threshold": thresholds["max_drawdown_pct"],
+            "passed": dd < thresholds["max_drawdown_pct"],
+        }
+
+        # sharpe > 1.0
+        sr = results.get("sharpe_ratio", 0.0)
+        checks["sharpe_ratio"] = {
+            "value": sr,
+            "threshold": thresholds["sharpe_ratio"],
+            "passed": sr > thresholds["sharpe_ratio"],
+        }
+
+        # min_trades > 300
+        trades = results.get("total_trades", 0)
+        checks["min_trades"] = {
+            "value": trades,
+            "threshold": thresholds["min_trades"],
+            "passed": trades > thresholds["min_trades"],
+        }
+
+        # ratchet_saves > 15%
+        rs = results.get("ratchet_saves_pct", 0.0)
+        checks["ratchet_saves_pct"] = {
+            "value": rs,
+            "threshold": thresholds["ratchet_saves_pct"],
+            "passed": rs > thresholds["ratchet_saves_pct"],
+        }
+
+        all_passed = all(c["passed"] for c in checks.values())
+
+        for name, check in checks.items():
+            status = "passed" if check["passed"] else "FAILED"
+            logger.info(
+                "Go-live %s: %s = %.2f (threshold: %.2f)",
+                status, name, check["value"], check["threshold"],
+            )
+
+        return {"passed": all_passed, "checks": checks}
 
     # ------------------------------------------------------------------
     # Data slicing
     # ------------------------------------------------------------------
 
+    @staticmethod
     def _split_data(
-        self,
         all_tf: dict[str, pd.DataFrame],
         start: pd.Timestamp,
         end: pd.Timestamp,
@@ -297,146 +385,73 @@ class WalkForwardOptimizer:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _aggregate_results(results: list[BacktestResult]) -> BacktestResult:
-        """Combine multiple fold results into a single aggregate."""
-        agg = BacktestResult()
+    def _aggregate_results(
+        fold_results: list[dict],
+        all_trades: list[dict],
+        all_equity: list[dict],
+    ) -> dict:
+        """Combine multiple fold results into a single aggregate dict."""
+        if not all_trades:
+            return {
+                "total_trades": 0,
+                "winners": 0,
+                "losers": 0,
+                "win_rate": 0.0,
+                "profit_factor": 0.0,
+                "total_pnl": 0.0,
+                "max_drawdown_pct": 0.0,
+                "sharpe_ratio": 0.0,
+                "ratchet_saves_pct": 0.0,
+                "equity_curve": [],
+                "trades": [],
+                "fold_count": len(fold_results),
+            }
 
-        if not results:
-            return agg
+        total = len(all_trades)
+        winners = [t for t in all_trades if t["profit_usd"] > 0]
+        losers = [t for t in all_trades if t["profit_usd"] <= 0]
 
-        all_trades: list[dict] = []
-        all_equity: list[dict] = []
+        gross_profit = sum(t["profit_usd"] for t in winners)
+        gross_loss = abs(sum(t["profit_usd"] for t in losers))
 
-        for r in results:
-            all_trades.extend(r.trades)
-            all_equity.extend(r.equity_curve)
-
-        agg.total_trades = len(all_trades)
-        agg.wins = sum(1 for t in all_trades if t["pnl"] > 0)
-        agg.losses = sum(1 for t in all_trades if t["pnl"] <= 0)
-        agg.win_rate = agg.wins / agg.total_trades if agg.total_trades > 0 else 0.0
-
-        agg.total_profit = sum(t["pnl"] for t in all_trades)
-
-        gross_wins = sum(t["pnl"] for t in all_trades if t["pnl"] > 0)
-        gross_losses = abs(sum(t["pnl"] for t in all_trades if t["pnl"] <= 0))
-        agg.profit_factor = (
-            gross_wins / gross_losses if gross_losses > 0 else float("inf")
+        # Max drawdown: worst across any fold
+        max_dd = max(
+            (f.get("max_drawdown_pct", 0.0) for f in fold_results), default=0.0,
         )
 
-        # Weighted average Sharpe
-        sharpes = [r.sharpe_ratio for r in results if r.total_trades > 0]
-        agg.sharpe_ratio = sum(sharpes) / len(sharpes) if sharpes else 0.0
-
-        # Worst-case drawdown across all folds
-        agg.max_drawdown_pct = max(
-            (r.max_drawdown_pct for r in results), default=0.0
+        # Average Sharpe across folds (weighted by trade count)
+        sharpe_weighted = 0.0
+        total_fold_trades = 0
+        for f in fold_results:
+            ft = f.get("total_trades", 0)
+            sharpe_weighted += f.get("sharpe_ratio", 0.0) * ft
+            total_fold_trades += ft
+        avg_sharpe = (
+            sharpe_weighted / total_fold_trades if total_fold_trades > 0 else 0.0
         )
 
-        # Average R for winners and losers
-        winner_rs = [t["R"] for t in all_trades if t["R"] > 0]
-        loser_rs = [t["R"] for t in all_trades if t["R"] <= 0]
-        if winner_rs:
-            agg.avg_winner_R = sum(winner_rs) / len(winner_rs)
-        if loser_rs:
-            agg.avg_loser_R = sum(loser_rs) / len(loser_rs)
-
-        # Ratchet stats
-        ratchet_saves = sum(r.ratchet_saves for r in results)
-        agg.ratchet_saves = ratchet_saves
-        agg.ratchet_save_pct = (
-            ratchet_saves / agg.total_trades if agg.total_trades > 0 else 0.0
+        # Ratchet saves aggregation
+        ratchet_saves = sum(
+            1 for t in all_trades
+            if t.get("ratchet_triggered", False)
+            and t.get("profit_usd", 0) >= 0
+            and t.get("close_reason", "") == "stop_loss"
         )
+        ratchet_saves_pct = ratchet_saves / total * 100 if total > 0 else 0.0
 
-        # Equity curve (concatenated)
-        agg.equity_curve = all_equity
-        agg.trades = all_trades
-
-        # Win rate by bias / regime (aggregate)
-        bias_wins: dict[str, int] = {}
-        bias_totals: dict[str, int] = {}
-        regime_wins: dict[str, int] = {}
-        regime_totals: dict[str, int] = {}
-
-        for t in all_trades:
-            d = t.get("htf_direction", "NEUTRAL")
-            bias_totals[d] = bias_totals.get(d, 0) + 1
-            if t["pnl"] > 0:
-                bias_wins[d] = bias_wins.get(d, 0) + 1
-
-            r = t.get("regime", "NORMAL")
-            regime_totals[r] = regime_totals.get(r, 0) + 1
-            if t["pnl"] > 0:
-                regime_wins[r] = regime_wins.get(r, 0) + 1
-
-        agg.win_rate_by_bias = {
-            d: bias_wins.get(d, 0) / n if n > 0 else 0.0
-            for d, n in bias_totals.items()
+        return {
+            "total_trades": total,
+            "winners": len(winners),
+            "losers": len(losers),
+            "win_rate": round(len(winners) / total * 100, 2),
+            "profit_factor": round(
+                gross_profit / gross_loss, 3,
+            ) if gross_loss > 0 else float("inf"),
+            "total_pnl": round(sum(t["profit_usd"] for t in all_trades), 2),
+            "max_drawdown_pct": round(max_dd, 2),
+            "sharpe_ratio": round(avg_sharpe, 3),
+            "ratchet_saves_pct": round(ratchet_saves_pct, 2),
+            "equity_curve": all_equity,
+            "trades": all_trades,
+            "fold_count": len(fold_results),
         }
-        agg.win_rate_by_regime = {
-            r: regime_wins.get(r, 0) / n if n > 0 else 0.0
-            for r, n in regime_totals.items()
-        }
-
-        # Monthly P&L
-        monthly: dict[str, float] = {}
-        for t in all_trades:
-            ct = t.get("close_time", "")
-            if ct and len(ct) >= 7:
-                month_key = ct[:7]
-                monthly[month_key] = monthly.get(month_key, 0.0) + t["pnl"]
-        agg.monthly_pnl = monthly
-
-        return agg
-
-    # ------------------------------------------------------------------
-    # Threshold evaluation
-    # ------------------------------------------------------------------
-
-    def _evaluate_thresholds(self, aggregate: BacktestResult) -> bool:
-        """Check whether the aggregate result passes all thresholds.
-
-        Threshold rules:
-            - win_rate > threshold (default 50 %)
-            - profit_factor > threshold (default 1.4)
-            - max_drawdown_pct < threshold (default 18 %)
-            - sharpe_ratio > threshold (default 1.0)
-            - total_trades >= min_trades (default 300)
-            - ratchet_save_pct > threshold (default 15 %)
-        """
-        checks: list[tuple[str, bool]] = [
-            (
-                "win_rate",
-                aggregate.win_rate > self.thresholds["win_rate"],
-            ),
-            (
-                "profit_factor",
-                aggregate.profit_factor > self.thresholds["profit_factor"],
-            ),
-            (
-                "max_drawdown",
-                aggregate.max_drawdown_pct < self.thresholds["max_drawdown_pct"],
-            ),
-            (
-                "sharpe_ratio",
-                aggregate.sharpe_ratio > self.thresholds["sharpe_ratio"],
-            ),
-            (
-                "min_trades",
-                aggregate.total_trades >= self.thresholds["min_trades"],
-            ),
-            (
-                "ratchet_saves",
-                aggregate.ratchet_save_pct > self.thresholds["ratchet_save_pct"],
-            ),
-        ]
-
-        all_passed = True
-        for name, ok in checks:
-            if not ok:
-                logger.warning("Threshold FAILED: %s", name)
-                all_passed = False
-            else:
-                logger.info("Threshold passed: %s", name)
-
-        return all_passed
