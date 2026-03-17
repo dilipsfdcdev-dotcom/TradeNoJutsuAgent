@@ -22,40 +22,169 @@ Learning:   Weekly LightGBM + Monthly PPO + Continuous MemoryAgent
 
 4. **Self-Learning Agent** — Continuously learns from live trade outcomes. Updates parameters, retrains models, all fully auditable.
 
-## Quick Start
+## Setup Guide (Step by Step)
+
+### Step 1: Prerequisites
+
+Install on your machine before starting:
+- **Python 3.11+** — [python.org/downloads](https://www.python.org/downloads/)
+- **MetaTrader 5** — installed on a Windows machine or Windows VPS
+- **PostgreSQL 16** — or use Docker (Step 4)
+- **Docker** (optional) — for running PostgreSQL easily
+
+### Step 2: Clone the Repository
 
 ```bash
-# 1. Clone and setup
 git clone <repo-url>
-cd xauusd_agent
+cd TradeNoJutsuAgent
+```
 
-# 2. Create virtual environment
+### Step 3: Create Python Virtual Environment
+
+```bash
 python3.11 -m venv venv
+
+# Linux/Mac:
 source venv/bin/activate
+
+# Windows:
+venv\Scripts\activate
+
+pip install --upgrade pip
 pip install -r requirements.txt
+```
 
-# 3. Configure
-cp xauusd_agent/config/.env.example xauusd_agent/config/.env
-# Edit .env with your MT5, DB, Telegram, and API credentials
+### Step 4: Start PostgreSQL Database
 
-# 4. Start PostgreSQL (via Docker)
+**Option A — Docker (recommended):**
+```bash
 docker-compose up -d postgres
+```
 
-# 5. Run
+**Option B — Local PostgreSQL:**
+```bash
+sudo -u postgres psql -c "CREATE USER agent WITH PASSWORD 'changeme';"
+sudo -u postgres psql -c "CREATE DATABASE xauusd_agent OWNER agent;"
+psql -U agent -d xauusd_agent -f scripts/init_db.sql
+```
+
+### Step 5: Configure Environment Variables
+
+```bash
+cp xauusd_agent/config/.env.example xauusd_agent/config/.env
+```
+
+Edit `xauusd_agent/config/.env` with your credentials:
+- **MT5_LOGIN** — Your MetaTrader 5 account number
+- **MT5_PASSWORD** — MT5 password
+- **MT5_SERVER** — Broker server name (e.g., `ICMarketsSC-Demo`)
+- **MT5_PATH** — Path to `terminal64.exe` on Windows
+- **DB_PASSWORD** — PostgreSQL password (default: `changeme`)
+- **TELEGRAM_BOT_TOKEN** — From [@BotFather](https://t.me/BotFather) on Telegram
+- **TELEGRAM_CHAT_ID** — Your Telegram user/group ID
+- **ANTHROPIC_API_KEY** — From [console.anthropic.com](https://console.anthropic.com/)
+- **NEWSAPI_KEY** — From [newsapi.org](https://newsapi.org/)
+
+### Step 6: Verify MT5 Connection
+
+Open a Python shell and test:
+```python
+import MetaTrader5 as mt5
+mt5.initialize()
+mt5.login(your_login, password="your_password", server="your_server")
+print(mt5.account_info())
+print(mt5.copy_rates_from_pos("XAUUSD", mt5.TIMEFRAME_M5, 0, 5))
+mt5.shutdown()
+```
+
+If `TIMEFRAME_M3` returns empty, the agent will auto-synthesize from M1 data.
+
+### Step 7: Review Settings
+
+Open `xauusd_agent/config/settings.yaml`. Key settings to review:
+- `risk.risk_pct: 1.0` — Risk per trade (1% of balance). Start conservative.
+- `risk.max_concurrent: 3` — Max simultaneous open trades
+- `signals.entry_threshold: 62` — Signal score needed to trade (52-78 range)
+
+### Step 8: Run in Demo Mode First
+
+```bash
 python -m xauusd_agent.main
 ```
 
-## Docker Deployment
+The agent starts two independent loops:
+- **Signal loop** — every 3 minutes, scans for trade setups
+- **Ratchet loop** — every 15 seconds, protects open trades
+
+Monitor via Telegram commands: `/status`, `/trades`, `/pnl`
+
+### Step 9: Backtest Before Going Live
+
+```python
+from xauusd_agent.backtest.data_loader import BacktestDataLoader
+from xauusd_agent.backtest.nautilus_backtest import XAUUSDBacktester
+from xauusd_agent.backtest.walk_forward import WalkForwardValidator
+from xauusd_agent.backtest.report_generator import BacktestReportGenerator
+import yaml
+
+# Load settings
+with open("xauusd_agent/config/settings.yaml") as f:
+    settings = yaml.safe_load(f)
+
+# Load data
+loader = BacktestDataLoader()
+data = loader.load_all_timeframes("XAUUSD")
+
+# Run walk-forward validation
+validator = WalkForwardValidator(settings)
+results = validator.run_walk_forward(data)
+
+# Generate HTML report
+report = BacktestReportGenerator()
+report.generate_html_report(results)
+print("Pass/fail:", results["passed"])
+```
+
+**Go-live thresholds** (all must pass):
+- Win rate > 50%
+- Profit factor > 1.4
+- Max drawdown < 18%
+- Sharpe ratio > 1.0
+- Minimum 300 trades across folds
+- Ratchet saves > 15% of trades
+
+### Step 10: Demo Trading (4 Weeks Minimum)
+
+Run on a **demo account** for at least 4 weeks. Verify:
+- [ ] Ratchet SL fires every 15 seconds (check `/trades`)
+- [ ] Lot sizes change when balance changes
+- [ ] `/bias` returns sensible HTF scores
+- [ ] `/learned` shows learning cycles after 10+ trades
+- [ ] Signal count is 5-12 per day in normal markets
+- [ ] News blackout activates during FOMC/NFP
+
+### Step 11: Go Live
+
+1. Fund with minimum test amount ($500-$1,000)
+2. Watch first 10 trades manually — verify lots match formula
+3. Verify ratchet moves SL in live account
+4. After 1 month: compare live vs backtest win rate (within 5%)
+5. Do NOT increase risk until 30-trade baseline is established
+
+## Docker Deployment (Full Stack)
 
 ```bash
 docker-compose up -d
 ```
+Starts PostgreSQL + the trading agent. Logs in `./logs/`.
 
-## VPS Deployment
+## VPS Deployment (Systemd)
 
 ```bash
 chmod +x setup_vps.sh
 ./setup_vps.sh
+# Then: sudo systemctl start xauusd-agent
+# Logs: journalctl -u xauusd-agent -f
 ```
 
 ## Project Structure
