@@ -1,0 +1,59 @@
+# ═══════════════════════════════════════════════════════
+# TradeNoJutsu Agent v1.0 — Configuration
+# [AGENT] = Self-learning module can auto-tune
+# [FIXED] = Manual override only
+# ═══════════════════════════════════════════════════════
+
+agent:
+  name: "TradeNoJutsu"
+  mode: "paper"                     # [FIXED] paper | live | backtest
+  llm_model: "claude-sonnet-4-6"  # [FIXED]
+  thinking_depth: "deep"            # [FIXED] quick | moderate | deep
+  log_level: "INFO"                 # [FIXED]
+
+trading:
+  symbols: ["XAUUSD"]              # [FIXED] assets to trade
+  primary_timeframes: ["5m", "15m"] # [FIXED]
+  htf_timeframes: ["1h", "4h", "1d"] # [FIXED]
+  data_source: "yfinance"          # [FIXED] yfinance | ccxt | mt5
+  exchange: "binance"              # [FIXED] for crypto via ccxt
+
+risk:
+  risk_per_trade_pct: 1.0          # [AGENT] % of capital per trade
+  risk_per_trade_max: 2.0          # [FIXED] hard ceiling
+  max_concurrent_positions: 3      # [AGENT]
+  max_daily_trades: 15             # [AGENT]
+  daily_drawdown_max_pct: 3.0      # [FIXED]
+  max_portfolio_risk_pct: 6.0      # [FIXED]
+  stop_loss_atr_mult: 1.5          # [AGENT] range: 0.8–2.5
+  take_profit_rr_ratio: 2.0        # [AGENT] reward:risk ratio
+  trailing_stop_enabled: true      # [AGENT]
+  trailing_stop_atr_mult: 1.0      # [AGENT]
+
+signals:
+  entry_threshold: 65              # [AGENT] range: 50–85
+  model_weights:
+    technical: 0.30                # [AGENT]
+    ml_ensemble: 0.35              # [AGENT]
+    llm_reasoning: 0.35            # [AGENT]
+  min_confluence: 3                # [AGENT] min indicators agreeing
+
+learning:
+  enabled: true                    # [FIXED]
+  cycle_every_n_trades: 10         # [FIXED] retrain after N trades
+  lookback_trades: 100             # [FIXED] trades to analyze
+  max_param_changes_per_cycle: 3   # [FIXED]
+  reward_metric: "sharpe"          # [FIXED] sharpe | profit | calmar
+  exploration_rate: 0.1            # [AGENT] epsilon for exploration
+  discount_factor: 0.95            # [FIXED]
+
+backtest:
+  initial_capital: 10000.0         # [FIXED]
+  commission_pct: 0.1              # [FIXED]
+  slippage_pct: 0.05               # [FIXED]
+  start_date: "2024-01-01"         # [FIXED]
+  end_date: "2025-12-31"           # [FIXED]
+
+session:
+  no_trade_friday_after: "20:00"   # [FIXED] UTC
+  no_trade_sunday_before: "21:00"  # [FIXED] UTC
