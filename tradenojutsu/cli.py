@@ -89,6 +89,55 @@ def analyze(symbol: str, timeframe: str):
         click.echo(f"  {name}: {val:.1f}/20")
     click.echo(f"  TOTAL: {score:.1f}/100")
 
+    # News sentiment
+    click.echo(f"\n=== News Sentiment ===")
+    try:
+        from tradenojutsu.data.news_sentiment import NewsSentimentAnalyzer
+        news = NewsSentimentAnalyzer()
+        report = news.analyze_sentiment(symbol)
+        click.echo(report.to_prompt_context())
+    except Exception as e:
+        click.echo(f"News analysis unavailable: {e}")
+
+
+@main.command()
+@click.option("--host", default="0.0.0.0", help="Dashboard host")
+@click.option("--port", default=8080, help="Dashboard port")
+def dashboard(host: str, port: int):
+    """Launch the web dashboard for monitoring."""
+    setup_logging()
+    from tradenojutsu.dashboard.server import run_dashboard
+    click.echo(f"Starting dashboard at http://{host}:{port}")
+    run_dashboard(host=host, port=port)
+
+
+@main.command()
+@click.option("--symbol", default="GC=F", help="Symbol to check sentiment")
+def sentiment(symbol: str):
+    """Analyze news sentiment for a symbol."""
+    setup_logging()
+    from tradenojutsu.data.news_sentiment import NewsSentimentAnalyzer
+
+    click.echo(f"Fetching news for {symbol}...\n")
+    analyzer = NewsSentimentAnalyzer()
+    headlines = analyzer.fetch_headlines(symbol)
+
+    if not headlines:
+        click.echo("No headlines found.")
+        return
+
+    click.echo(f"Found {len(headlines)} headlines:")
+    for i, h in enumerate(headlines[:10], 1):
+        click.echo(f"  {i}. [{h.source}] {h.headline}")
+
+    click.echo(f"\nAnalyzing sentiment (requires ANTHROPIC_API_KEY)...")
+    try:
+        report = analyzer.analyze_sentiment(symbol, headlines)
+        click.echo(f"\n{report.to_prompt_context()}")
+    except Exception as e:
+        click.echo(f"LLM analysis failed: {e}")
+        click.echo("Set ANTHROPIC_API_KEY in your .env file for sentiment analysis.")
+
 
 @main.command()
 def status():

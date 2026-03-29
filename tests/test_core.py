@@ -117,7 +117,7 @@ class TestRiskManager:
         assert params.position_size > 0
         assert params.stop_loss < 100.0
         assert params.take_profit > 100.0
-        assert params.risk_amount == 100.0  # 1% of 10000
+        assert params.risk_amount == 90.0  # 1% * 0.9 (ranging regime) of 10000
 
     def test_check_exit_conditions(self):
         rm = RiskManager()

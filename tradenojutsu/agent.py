@@ -16,6 +16,7 @@ from tradenojutsu.brain.signal_combiner import SignalCombiner
 from tradenojutsu.config import load_settings
 from tradenojutsu.data.market_data import MarketDataFetcher
 from tradenojutsu.data.models import Direction, PerformanceMetrics
+from tradenojutsu.data.news_sentiment import NewsSentimentAnalyzer
 from tradenojutsu.execution.paper_trader import PaperTrader
 from tradenojutsu.infra.database import insert_signal
 from tradenojutsu.infra.logger import get_logger, setup_logging
@@ -104,6 +105,19 @@ class TradeNoJutsuAgent:
             reward_metric=learn_cfg.get("reward_metric", "sharpe"),
         )
 
+        # News sentiment analyzer
+        self.news_analyzer = NewsSentimentAnalyzer(
+            llm_model=settings["agent"].get("news_llm_model", "claude-haiku-4-5-20251001"),
+            api_key=settings.get("secrets", {}).get("anthropic_api_key"),
+        )
+
+        # Telegram alerts (optional)
+        self.telegram = None
+        tg_cfg = settings.get("telegram", {})
+        if tg_cfg.get("bot_token") and tg_cfg.get("chat_id"):
+            from tradenojutsu.telegram_bot.alerts import TelegramAlerter
+            self.telegram = TelegramAlerter(tg_cfg["bot_token"], tg_cfg["chat_id"])
+
         self.symbols = settings["trading"].get("symbols", ["XAUUSD"])
         self.timeframes = settings["trading"].get("primary_timeframes", ["15m"])
         self._running = False
@@ -166,6 +180,18 @@ class TradeNoJutsuAgent:
         # 6. ML ensemble prediction
         ml_score, ml_direction = self.ml_ensemble.predict(df)
 
+        # 6b. News sentiment analysis
+        try:
+            sentiment = self.news_analyzer.analyze_sentiment(symbol)
+            market_state.indicators["news_sentiment"] = sentiment.overall_sentiment
+            logger.info(
+                f"News sentiment: {sentiment.sentiment_label} "
+                f"({sentiment.overall_sentiment:+.2f}, {sentiment.news_count} headlines)"
+            )
+        except Exception as e:
+            logger.warning(f"News sentiment failed: {e}")
+            sentiment = None
+
         # 7. AI Brain thinks (the "self-thinking" part)
         llm_decision = self.reasoner.think(
             market_state=market_state,
@@ -210,6 +236,8 @@ class TradeNoJutsuAgent:
 
             if trade:
                 logger.info(f"Trade executed: {trade.direction.value} {trade.symbol}")
+                if self.telegram:
+                    await self.telegram.alert_trade_opened(trade, combined)
 
         # 10. Update open positions
         prices = {symbol: market_state.price}
@@ -217,11 +245,15 @@ class TradeNoJutsuAgent:
         atrs = {symbol: atr_val}
         closed_trades = self.paper_trader.update_positions(prices, atrs)
 
-        # 11. Self-learning check
+        # 11. Self-learning check + alerts for closed trades
         for ct in closed_trades:
+            if self.telegram:
+                await self.telegram.alert_trade_closed(ct)
             result = self.learner.on_trade_closed()
             if result:
                 logger.info(f"Learning cycle complete: {result.get('changes', [])}")
+                if self.telegram:
+                    await self.telegram.alert_learning_cycle(result)
 
     def stop(self) -> None:
         """Stop the agent loop."""
