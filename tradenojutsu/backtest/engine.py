@@ -10,6 +10,7 @@ import pandas as pd
 
 from tradenojutsu.analysis.technical import TechnicalAnalyzer
 from tradenojutsu.data.models import Direction, PerformanceMetrics, Signal, Trade, TradeStatus
+from tradenojutsu.execution.ratchet_sl import compute_new_sl
 from tradenojutsu.infra.logger import get_logger
 from tradenojutsu.risk.manager import RiskManager, RiskParams
 from tradenojutsu.strategy.strategies import BaseStrategy, get_all_strategies
@@ -47,10 +48,14 @@ class BacktestEngine:
         initial_capital: float = 10000.0,
         commission_pct: float = 0.1,
         slippage_pct: float = 0.05,
+        use_full_features: bool = True,
+        use_ratchet_sl: bool = True,
     ):
         self.initial_capital = initial_capital
         self.commission_pct = commission_pct
         self.slippage_pct = slippage_pct
+        self.use_full_features = use_full_features
+        self.use_ratchet_sl = use_ratchet_sl
         self.analyzer = TechnicalAnalyzer()
 
     def run(
@@ -71,8 +76,20 @@ class BacktestEngine:
         if strategies is None:
             strategies = get_all_strategies()
 
-        # Compute indicators
-        df = self.analyzer.compute_indicators(df)
+        # Compute indicators (use 150+ features if available)
+        if self.use_full_features:
+            try:
+                from tradenojutsu.analysis.features_150 import compute_features
+                from tradenojutsu.analysis.smc_features import compute_smc_features
+                df = compute_features(df)
+                smc = compute_smc_features(df)
+                df = pd.concat([df, smc], axis=1)
+                logger.info(f"Using full features: {df.shape[1]} columns")
+            except Exception as e:
+                logger.warning(f"Full features failed, falling back to basic: {e}")
+                df = self.analyzer.compute_indicators(df)
+        else:
+            df = self.analyzer.compute_indicators(df)
 
         # Setup risk manager
         rm_kwargs = {"capital": self.initial_capital}
@@ -92,8 +109,16 @@ class BacktestEngine:
             atr = bar.get("atr", price * 0.02)
             lookback = df.iloc[:i + 1]
 
-            # Check open trades for exit
+            # Check open trades for exit (with ratchet SL)
             for trade in list(open_trades):
+                # Ratchet stop-loss: lock in profit as trade moves favorably
+                if self.use_ratchet_sl and trade.entry_price > 0:
+                    initial_risk = abs(trade.entry_price - trade.stop_loss) * trade.quantity
+                    if initial_risk > 0:
+                        new_sl = compute_new_sl(trade, price, initial_risk)
+                        if new_sl is not None:
+                            trade.stop_loss = new_sl
+
                 should_exit, reason = risk_mgr.check_exit_conditions(trade, price)
                 if should_exit:
                     trade = self._close_trade(trade, price, reason)

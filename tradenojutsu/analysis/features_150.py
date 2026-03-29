@@ -472,6 +472,40 @@ def compute_features(df: pd.DataFrame, prefix: str = "") -> pd.DataFrame:
     ], axis=1).max(axis=1)
 
     # ------------------------------------------------------------------ #
+    # 31. ADDITIONAL CROSS / DERIVED FEATURES                             #
+    # ------------------------------------------------------------------ #
+    # EMA cross signals (1 on cross-up bar, -1 on cross-down bar, 0 else)
+    out["ema_9_21_xup"] = ((out["ema_9"] > out["ema_21"]) &
+                           (out["ema_9"].shift(1) <= out["ema_21"].shift(1))).astype(int)
+    out["ema_9_21_xdn"] = ((out["ema_9"] < out["ema_21"]) &
+                           (out["ema_9"].shift(1) >= out["ema_21"].shift(1))).astype(int)
+
+    # RSI zones (overbought / oversold / neutral encoded)
+    out["rsi_14_zone"] = np.where(out["rsi_14"] > 70, 1,
+                          np.where(out["rsi_14"] < 30, -1, 0))
+
+    # ADX strength category
+    out["adx_strong"] = (out["adx"] > 25).astype(int)
+
+    # Stochastic zones
+    out["stoch_zone"] = np.where(out["stoch_k"] > 80, 1,
+                         np.where(out["stoch_k"] < 20, -1, 0))
+
+    # Momentum composite: normalized sum of RSI + Stoch + Williams
+    out["momentum_composite"] = (
+        (out["rsi_14"] - 50) / 50 +
+        (out["stoch_k"] - 50) / 50 +
+        (out["williams_r"] + 50) / 50
+    ) / 3
+
+    # Volatility ratio: current ATR vs rolling mean ATR
+    atr_mean_50 = out["atr_14"].rolling(50).mean()
+    out["atr_expansion"] = _safe_div(out["atr_14"], atr_mean_50)
+
+    # Close position within daily range
+    out["close_position"] = _safe_div(c - l, h - l)
+
+    # ------------------------------------------------------------------ #
     # Apply prefix & final NaN handling                                   #
     # ------------------------------------------------------------------ #
     # Identify only the new feature columns (not original OHLCV)
