@@ -62,16 +62,28 @@ class SentimentReport:
 
 # Symbol to search query mapping
 SYMBOL_QUERIES = {
-    "XAUUSD": "gold price XAUUSD",
-    "GC=F": "gold futures price",
-    "AAPL": "Apple stock AAPL",
-    "MSFT": "Microsoft stock MSFT",
-    "GOOGL": "Google Alphabet stock",
-    "TSLA": "Tesla stock TSLA",
-    "SPY": "S&P 500 SPY market",
-    "QQQ": "Nasdaq QQQ tech stocks",
-    "BTC/USDT": "Bitcoin BTC crypto",
-    "ETH/USDT": "Ethereum ETH crypto",
+    # Metals
+    "XAUUSD": "gold price XAUUSD forecast",
+    "GC=F": "gold futures price forecast",
+    "XAGUSD": "silver price XAGUSD forecast",
+    "SI=F": "silver futures price forecast",
+    # Crypto
+    "BTC-USD": "Bitcoin BTC price crypto",
+    "BTC/USDT": "Bitcoin BTC price crypto",
+    "BTCUSD": "Bitcoin BTC price crypto",
+    "ETH-USD": "Ethereum ETH price crypto",
+    "ETH/USDT": "Ethereum ETH price crypto",
+    # Forex
+    "EURUSD=X": "EUR USD forex euro dollar",
+    "EURUSD": "EUR USD forex euro dollar",
+    "GBPUSD=X": "GBP USD forex pound dollar",
+    "GBPUSD": "GBP USD forex pound dollar",
+    "USDJPY=X": "USD JPY forex yen dollar",
+    "USDJPY": "USD JPY forex yen dollar",
+    "AUDUSD=X": "AUD USD forex australian dollar",
+    "USDCHF=X": "USD CHF forex swiss franc",
+    "USDCAD=X": "USD CAD forex canadian dollar",
+    "NZDUSD=X": "NZD USD forex new zealand dollar",
 }
 
 
