@@ -28,20 +28,21 @@ from tradenojutsu.infra.logger import get_logger
 logger = get_logger("learning.self_learner")
 
 
-# Parameters that the agent can tune, with their valid ranges
+# Parameters the agent can tune — wide ranges, no artificial caps
 TUNABLE_PARAMS = {
-    "risk.risk_per_trade_pct": (0.5, 2.0, 0.1),    # (min, max, step)
-    "risk.max_concurrent_positions": (1, 5, 1),
-    "risk.max_daily_trades": (5, 25, 1),
-    "risk.stop_loss_atr_mult": (0.8, 2.5, 0.1),
-    "risk.take_profit_rr_ratio": (1.0, 4.0, 0.25),
-    "risk.trailing_stop_atr_mult": (0.5, 2.0, 0.1),
-    "signals.entry_threshold": (50, 85, 2.5),
-    "signals.model_weights.technical": (0.1, 0.6, 0.05),
-    "signals.model_weights.ml_ensemble": (0.1, 0.6, 0.05),
-    "signals.model_weights.llm_reasoning": (0.1, 0.6, 0.05),
-    "signals.min_confluence": (1, 4, 1),
-    "learning.exploration_rate": (0.01, 0.3, 0.01),
+    # Risk — agent decides how aggressive to be (0.5% to 10% per trade)
+    "risk.risk_per_trade_pct": (0.5, 10.0, 0.5),     # (min, max, step)
+    "risk.stop_loss_atr_mult": (0.5, 4.0, 0.1),      # Tight to wide stops
+    "risk.take_profit_rr_ratio": (0.5, 6.0, 0.25),   # Quick scalp to big runner
+    "risk.trailing_stop_atr_mult": (0.3, 3.0, 0.1),  # Tight to loose trail
+    # Signal weights — agent learns what sources to trust
+    "signals.entry_threshold": (30, 90, 2.5),         # Low bar to high bar
+    "signals.model_weights.technical": (0.05, 0.80, 0.05),
+    "signals.model_weights.ml_ensemble": (0.05, 0.80, 0.05),
+    "signals.model_weights.llm_reasoning": (0.05, 0.80, 0.05),
+    "signals.min_confluence": (1, 5, 1),
+    # Learning — how fast to adapt
+    "learning.exploration_rate": (0.01, 0.5, 0.02),   # Conservative to aggressive exploration
 }
 
 

@@ -30,16 +30,14 @@ trading:
   exchange: "binance"              # [FIXED] for crypto via ccxt
 
 risk:
-  risk_per_trade_pct: 1.0          # [AGENT] % of capital per trade
-  risk_per_trade_max: 2.0          # [FIXED] hard ceiling
-  max_concurrent_positions: 3      # [AGENT]
-  max_daily_trades: 15             # [AGENT]
-  daily_drawdown_max_pct: 3.0      # [FIXED]
-  max_portfolio_risk_pct: 6.0      # [FIXED]
-  stop_loss_atr_mult: 1.5          # [AGENT] range: 0.8–2.5
-  take_profit_rr_ratio: 2.0        # [AGENT] reward:risk ratio
+  # No hard limits — agent decides everything dynamically
+  # Risk scales with signal confidence + market regime + recent performance
+  risk_per_trade_pct: 2.0          # [AGENT] base risk %, scaled by confidence
+  stop_loss_atr_mult: 1.5          # [AGENT] ATR-based, regime-adaptive
+  take_profit_rr_ratio: 2.0        # [AGENT] dynamic R:R, wider in trends
   trailing_stop_enabled: true      # [AGENT]
   trailing_stop_atr_mult: 1.0      # [AGENT]
+  # No caps on positions, trades, or drawdown — agent manages like a human
 
 signals:
   entry_threshold: 65              # [AGENT] range: 50–85
