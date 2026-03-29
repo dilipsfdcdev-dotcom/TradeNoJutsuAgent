@@ -1,8 +1,6 @@
-# ═══════════════════════════════════════════════════════
-# TradeNoJutsu Agent v1.0 — Configuration
+# TradeNoJutsu Agent v1.0 - Configuration
 # [AGENT] = Self-learning module can auto-tune
 # [FIXED] = Manual override only
-# ═══════════════════════════════════════════════════════
 
 agent:
   name: "TradeNoJutsu"
@@ -13,7 +11,7 @@ agent:
   news_llm_model: "claude-haiku-4-5-20251001"  # [FIXED] cheap model for news
 
 trading:
-  # ── Your Markets ──────────────────────────────────
+  # Your Markets
   # yfinance symbols:  GC=F (Gold), SI=F (Silver), BTC-USD, EURUSD=X, GBPUSD=X
   # ccxt symbols:      BTC/USDT, ETH/USDT (use data_source: ccxt)
   # MT5 symbols:       XAUUSD, XAGUSD, BTCUSD, EURUSD (use data_source: mt5)
@@ -30,17 +28,17 @@ trading:
   exchange: "binance"              # [FIXED] for crypto via ccxt
 
 risk:
-  # No hard limits — agent decides everything dynamically
+  # No hard limits - agent decides everything dynamically
   # Risk scales with signal confidence + market regime + recent performance
   risk_per_trade_pct: 2.0          # [AGENT] base risk %, scaled by confidence
   stop_loss_atr_mult: 1.5          # [AGENT] ATR-based, regime-adaptive
   take_profit_rr_ratio: 2.0        # [AGENT] dynamic R:R, wider in trends
   trailing_stop_enabled: true      # [AGENT]
   trailing_stop_atr_mult: 1.0      # [AGENT]
-  # No caps on positions, trades, or drawdown — agent manages like a human
+  # No caps on positions, trades, or drawdown - agent manages like a human
 
 signals:
-  entry_threshold: 65              # [AGENT] range: 50–85
+  entry_threshold: 65              # [AGENT] range: 50-85
   model_weights:
     technical: 0.30                # [AGENT]
     ml_ensemble: 0.35              # [AGENT]

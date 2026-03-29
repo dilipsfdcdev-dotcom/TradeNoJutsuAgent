@@ -21,7 +21,7 @@ def load_settings(config_path: Path | None = None) -> dict[str, Any]:
         return _settings_cache
 
     path = config_path or _CONFIG_DIR / "settings.yaml"
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         settings = yaml.safe_load(f)
 
     # Load env vars
@@ -43,7 +43,7 @@ def load_settings(config_path: Path | None = None) -> dict[str, Any]:
 def save_settings(settings: dict[str, Any], config_path: Path | None = None) -> None:
     """Save settings back to YAML (used by self-learning module)."""
     path = config_path or _CONFIG_DIR / "settings.yaml"
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         yaml.dump(settings, f, default_flow_style=False, sort_keys=False)
     global _settings_cache
     _settings_cache = None
