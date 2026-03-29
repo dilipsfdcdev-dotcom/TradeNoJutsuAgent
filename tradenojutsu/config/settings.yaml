@@ -1,0 +1,79 @@
+# TradeNoJutsu Agent v1.0 - Configuration
+# [AGENT] = Self-learning module can auto-tune
+# [FIXED] = Manual override only
+
+agent:
+  name: "TradeNoJutsu"
+  mode: "paper"                     # [FIXED] paper | live | backtest
+  llm_model: "claude-sonnet-4-6"  # [FIXED]
+  thinking_depth: "deep"            # [FIXED] quick | moderate | deep
+  log_level: "INFO"                 # [FIXED]
+  news_llm_model: "claude-haiku-4-5-20251001"  # [FIXED] cheap model for news
+
+trading:
+  # Your Markets
+  # yfinance symbols:  GC=F (Gold), SI=F (Silver), BTC-USD, EURUSD=X, GBPUSD=X
+  # ccxt symbols:      BTC/USDT, ETH/USDT (use data_source: ccxt)
+  # MT5 symbols:       XAUUSD, XAGUSD, BTCUSD, EURUSD (use data_source: mt5)
+  symbols:
+    - "GC=F"           # Gold (XAUUSD)
+    - "SI=F"           # Silver (XAGUSD)
+    - "BTC-USD"        # Bitcoin
+    - "EURUSD=X"       # EUR/USD
+    - "GBPUSD=X"       # GBP/USD
+    - "USDJPY=X"       # USD/JPY
+  primary_timeframes: ["1m", "3m"]   # [FIXED] scalping timeframes
+  htf_timeframes: ["15m", "1h", "4h"] # [FIXED] higher timeframe context
+  data_source: "yfinance"          # [FIXED] yfinance | ccxt | mt5
+  exchange: "binance"              # [FIXED] for crypto via ccxt
+
+risk:
+  # No hard limits - agent decides everything dynamically
+  # Risk scales with signal confidence + market regime + recent performance
+  risk_per_trade_pct: 2.0          # [AGENT] base risk %, scaled by confidence
+  stop_loss_atr_mult: 1.5          # [AGENT] ATR-based, regime-adaptive
+  take_profit_rr_ratio: 2.0        # [AGENT] dynamic R:R, wider in trends
+  trailing_stop_enabled: true      # [AGENT]
+  trailing_stop_atr_mult: 1.0      # [AGENT]
+  # No caps on positions, trades, or drawdown - agent manages like a human
+
+signals:
+  entry_threshold: 65              # [AGENT] range: 50-85
+  model_weights:
+    technical: 0.30                # [AGENT]
+    ml_ensemble: 0.35              # [AGENT]
+    llm_reasoning: 0.35            # [AGENT]
+  min_confluence: 3                # [AGENT] min indicators agreeing
+
+learning:
+  enabled: true                    # [FIXED]
+  cycle_every_n_trades: 10         # [FIXED] retrain after N trades
+  lookback_trades: 100             # [FIXED] trades to analyze
+  max_param_changes_per_cycle: 3   # [FIXED]
+  reward_metric: "sharpe"          # [FIXED] sharpe | profit | calmar
+  exploration_rate: 0.1            # [AGENT] epsilon for exploration
+  discount_factor: 0.95            # [FIXED]
+
+backtest:
+  initial_capital: 10000.0         # [FIXED]
+  commission_pct: 0.1              # [FIXED]
+  slippage_pct: 0.05               # [FIXED]
+  start_date: "2024-01-01"         # [FIXED]
+  end_date: "2025-12-31"           # [FIXED]
+
+news:
+  enabled: true                    # [FIXED]
+  cache_ttl_seconds: 300           # [FIXED] 5 min cache
+  max_headlines: 15                # [FIXED]
+
+telegram:
+  bot_token: ""                    # [FIXED] from @BotFather
+  chat_id: ""                      # [FIXED] your chat ID
+
+dashboard:
+  host: "0.0.0.0"                  # [FIXED]
+  port: 8080                       # [FIXED]
+
+session:
+  no_trade_friday_after: "20:00"   # [FIXED] UTC
+  no_trade_sunday_before: "21:00"  # [FIXED] UTC
