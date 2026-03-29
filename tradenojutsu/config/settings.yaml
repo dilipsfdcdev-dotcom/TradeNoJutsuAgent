@@ -24,8 +24,8 @@ trading:
     - "EURUSD=X"       # EUR/USD
     - "GBPUSD=X"       # GBP/USD
     - "USDJPY=X"       # USD/JPY
-  primary_timeframes: ["5m", "15m"] # [FIXED]
-  htf_timeframes: ["1h", "4h", "1d"] # [FIXED]
+  primary_timeframes: ["1m", "3m"]   # [FIXED] scalping timeframes
+  htf_timeframes: ["15m", "1h", "4h"] # [FIXED] higher timeframe context
   data_source: "yfinance"          # [FIXED] yfinance | ccxt | mt5
   exchange: "binance"              # [FIXED] for crypto via ccxt
 
