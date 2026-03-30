@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trading-agent"
+version = "0.1.0"
+description = "AI-powered trading agent"
+requires-python = ">=3.11"
+dependencies = [
+    "MetaTrader5",
+    "anthropic",
+    "sqlalchemy[asyncio]>=2.0",
+    "alembic",
+    "asyncpg",
+    "psycopg2-binary",
+    "redis",
+    "pandas",
+    "numpy",
+    "pandas-ta",
+    "apscheduler>=3.10",
+    "fastapi",
+    "uvicorn[standard]",
+    "websockets",
+    "httpx",
+    "pydantic>=2.0",
+    "pydantic-settings",
+    "structlog",
+    "python-dotenv",
+    "jinja2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
