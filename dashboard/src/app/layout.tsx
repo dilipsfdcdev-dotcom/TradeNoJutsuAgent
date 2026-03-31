@@ -16,6 +16,8 @@ const navItems = [
   { href: '/trades', label: 'Trades', icon: '📈' },
   { href: '/backtest', label: 'Backtest', icon: '🔬' },
   { href: '/settings', label: 'Settings', icon: '⚙️' },
+  { href: '/agent-log', label: 'Agent Log', icon: '📋' },
+  { href: '/setup', label: 'Setup', icon: '🔧' },
 ];
 
 export default function RootLayout({

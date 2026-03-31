@@ -28,6 +28,10 @@ dependencies = [
     "structlog",
     "python-dotenv",
     "jinja2",
+    "xgboost>=2.0",
+    "torch>=2.0",
+    "scikit-learn>=1.3",
+    "shap>=0.43",
 ]
 
 [project.optional-dependencies]

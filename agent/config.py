@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     NEWS_API_KEY: str = ""
     NEWS_CHECK_INTERVAL_SEC: int = 60
 
+    # Architecture mode: "v2" (Claude decides) or "v3" (ML decides, Claude vetoes)
+    AGENT_MODE: str = "v3"
+
     # Dashboard
     DASHBOARD_PORT: int = 3000
     WS_PORT: int = 8765

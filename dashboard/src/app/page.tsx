@@ -7,6 +7,8 @@ import EquityCurve from '@/components/EquityCurve';
 import MetricsPanel, { MetricsData } from '@/components/MetricsPanel';
 import SignalLog from '@/components/SignalLog';
 import NewsPanel, { NewsItem } from '@/components/NewsPanel';
+import MTFStatusPanel from '@/components/MTFStatusPanel';
+import MLScoresPanel from '@/components/MLScoresPanel';
 import { useWebSocket } from '@/hooks/useWebSocket';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -17,6 +19,38 @@ interface AgentStatus {
 
 interface PositionsMessage {
   positions?: ActiveTrade[];
+}
+
+interface MTFData {
+  symbol: string;
+  h1_bias: string;
+  h1_trend_strength: number;
+  h1_structure: string;
+  h1_ema_stack: string;
+  m15_structure: string;
+  m15_poi: { zone_type: string; high: number; low: number } | null;
+  m15_active_zones: number;
+  m3_momentum: string;
+  m3_confirmed: boolean;
+  m1_entry_signal: { direction: string; entry_price: number } | null;
+  confluence_score: number;
+  gates_passed: boolean;
+  setup_narrative: string;
+}
+
+interface MLScores {
+  symbol: string;
+  xgb_score: number;
+  xgb_pass: boolean;
+  xgb_threshold: number;
+  xgb_top_features: [string, number][];
+  lstm_confidence: number;
+  lstm_direction: string;
+  lstm_regime: string;
+  lstm_pass: boolean;
+  xgb_auc_history: number[];
+  lstm_acc_history: number[];
+  next_retrain: string;
 }
 
 export default function Home() {
@@ -38,6 +72,8 @@ export default function Home() {
   const [news, setNews] = useState<NewsItem[]>([]);
 
   const { data: positionsData } = useWebSocket<PositionsMessage>('positions');
+  const { data: mtfData } = useWebSocket<MTFData>('mtf_state');
+  const { data: mlData } = useWebSocket<MLScores>('ml_scores');
 
   // Update active trades from WebSocket
   useEffect(() => {
@@ -208,12 +244,22 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Row 3: AI Signal Log */}
+      {/* Row 3: MTF Status Panel */}
+      <div style={{ minHeight: '280px' }}>
+        <MTFStatusPanel data={mtfData} symbol="XAUUSD" />
+      </div>
+
+      {/* Row 4: ML Scores Panel */}
+      <div style={{ minHeight: '280px' }}>
+        <MLScoresPanel data={mlData} symbol="XAUUSD" />
+      </div>
+
+      {/* Row 5: AI Signal Log */}
       <div style={{ minHeight: '240px', maxHeight: '320px' }}>
         <SignalLog />
       </div>
 
-      {/* Row 4: News Sentiment */}
+      {/* Row 6: News Sentiment */}
       <div style={{ minHeight: '240px', maxHeight: '360px' }}>
         <NewsPanel news={news} />
       </div>

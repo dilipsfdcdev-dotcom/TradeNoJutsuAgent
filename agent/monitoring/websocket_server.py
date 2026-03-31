@@ -316,6 +316,101 @@ def create_app() -> FastAPI:
         logger.info("settings.updated", changes=updated)
         return {"updated": updated}
 
+    @app.get("/api/settings")
+    async def get_all_settings(
+        session: AsyncSession = Depends(get_session),
+    ) -> dict:
+        """Return all current settings for the setup page."""
+        result = await session.execute(select(Setting))
+        rows = result.scalars().all()
+        db_settings = {r.key: r.value for r in rows}
+        return _serialise({
+            "MT5_LOGIN": settings.MT5_LOGIN,
+            "MT5_SERVER": settings.MT5_SERVER,
+            "MT5_PATH": settings.MT5_PATH,
+            "ANTHROPIC_API_KEY": settings.ANTHROPIC_API_KEY[:8] + "..." if settings.ANTHROPIC_API_KEY else "",
+            "CLAUDE_MODEL": settings.CLAUDE_MODEL,
+            "DATABASE_URL": settings.DATABASE_URL,
+            "REDIS_URL": settings.REDIS_URL,
+            "NEWS_API_KEY": settings.NEWS_API_KEY[:8] + "..." if settings.NEWS_API_KEY else "",
+            "MAX_RISK_PER_TRADE_PCT": settings.MAX_RISK_PER_TRADE_PCT,
+            "MAX_DAILY_LOSS_PCT": settings.MAX_DAILY_LOSS_PCT,
+            "MAX_OPEN_TRADES": settings.MAX_OPEN_TRADES,
+            "MAX_DRAWDOWN_PCT": settings.MAX_DRAWDOWN_PCT,
+            "MIN_RR_RATIO": settings.MIN_RR_RATIO,
+            "SPREAD_FILTER_MULTIPLIER": settings.SPREAD_FILTER_MULTIPLIER,
+            "SYMBOLS": settings.SYMBOLS,
+            "TIMEFRAMES": settings.TIMEFRAMES,
+            "agent_paused": db_settings.get("agent_paused", {}).get("paused", False),
+        })
+
+    @app.post("/api/test-mt5")
+    async def test_mt5(payload: dict) -> dict:
+        """Test MT5 connection with provided credentials."""
+        try:
+            from agent.data.mt5_feed import init_mt5, get_account_info, shutdown_mt5
+            # Temporarily set credentials
+            login = payload.get("login", settings.MT5_LOGIN)
+            if login:
+                object.__setattr__(settings, "MT5_LOGIN", int(login))
+            if payload.get("password"):
+                object.__setattr__(settings, "MT5_PASSWORD", payload["password"])
+            if payload.get("server"):
+                object.__setattr__(settings, "MT5_SERVER", payload["server"])
+            if payload.get("path"):
+                object.__setattr__(settings, "MT5_PATH", payload["path"])
+
+            connected = init_mt5()
+            if connected:
+                info = get_account_info()
+                return _serialise({"connected": True, "account": info})
+            return {"connected": False, "error": "Failed to connect to MT5"}
+        except Exception as e:
+            return {"connected": False, "error": str(e)}
+
+    @app.post("/api/test-claude")
+    async def test_claude(payload: dict) -> dict:
+        """Test Claude API connection."""
+        try:
+            import anthropic
+            api_key = payload.get("api_key", settings.ANTHROPIC_API_KEY)
+            model = payload.get("model", settings.CLAUDE_MODEL)
+            client = anthropic.Anthropic(api_key=api_key)
+            response = client.messages.create(
+                model=model, max_tokens=10,
+                messages=[{"role": "user", "content": "Say hello"}],
+            )
+            return {"connected": True, "model": model, "response": response.content[0].text}
+        except Exception as e:
+            return {"connected": False, "error": str(e)}
+
+    @app.post("/api/test-db")
+    async def test_db(session: AsyncSession = Depends(get_session)) -> dict:
+        """Test database connectivity."""
+        try:
+            await session.execute(select(func.count(Trade.id)))
+            return {"postgresql": True, "error": None}
+        except Exception as e:
+            return {"postgresql": False, "error": str(e)}
+
+    @app.get("/api/health")
+    async def health() -> dict:
+        """Basic health check endpoint."""
+        return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+    @app.get("/api/veto-status")
+    async def get_veto_status() -> dict:
+        """Return current veto register state."""
+        try:
+            from agent.brain.veto_register import veto_register
+            all_vetoes = veto_register.get_all()
+            return _serialise({
+                k: v.to_dict() if hasattr(v, "to_dict") else str(v)
+                for k, v in all_vetoes.items()
+            })
+        except Exception:
+            return {}
+
     @app.post("/api/toggle")
     async def toggle_agent(
         session: AsyncSession = Depends(get_session),

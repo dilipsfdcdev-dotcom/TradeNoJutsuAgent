@@ -5,12 +5,16 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 import anthropic
 import pandas as pd
 import structlog
 
 from agent.config import settings
+
+if TYPE_CHECKING:
+    from agent.signals.mtf_analyzer import MTFState
 
 logger = structlog.get_logger()
 
@@ -30,6 +34,10 @@ class TradeDecision:
     risk_score: int       # 1-10
     symbol: str
     timeframe: str
+    # v2 optional fields
+    take_profit_2: float | None = None
+    lot_size_suggestion: str = "normal"   # "normal" | "reduced" | "increased"
+    risk_warnings: str = ""
 
 
 _WAIT_DECISION_DEFAULTS = dict(
@@ -196,8 +204,16 @@ def _build_prompt(
     open_positions: list,
     recent_trades: list,
     daily_pnl: float,
+    mtf_state: MTFState | None = None,
+    xgb_result: dict | None = None,
+    lstm_result: dict | None = None,
 ) -> str:
-    """Assemble the full analysis prompt sent to Claude."""
+    """Assemble the full analysis prompt sent to Claude.
+
+    If *mtf_state*, *xgb_result*, and *lstm_result* are provided the v2
+    three-brain prompt is used.  Otherwise the original v1 prompt is
+    returned for backward compatibility.
+    """
 
     balance = account_info.get("balance", 0)
     equity = account_info.get("equity", 0)
@@ -233,6 +249,39 @@ def _build_prompt(
             f"Score: {sentiment.score:+.2f} | Impact: {sentiment.impact} | "
             f"{sentiment.reasoning}"
         )
+
+    # -----------------------------------------------------------------
+    # v2 prompt (three-brain hybrid architecture)
+    # -----------------------------------------------------------------
+    if mtf_state is not None and xgb_result is not None and lstm_result is not None:
+        return _build_v2_prompt(
+            symbol=symbol,
+            candles_1m=candles_1m,
+            candles_3m=candles_3m,
+            patterns=patterns,
+            market_context=market_context,
+            sentiment_text=sentiment_text,
+            account_info=account_info,
+            open_positions=open_positions,
+            recent_trades=recent_trades,
+            daily_pnl=daily_pnl,
+            balance=balance,
+            equity=equity,
+            margin=margin,
+            free_margin=free_margin,
+            current_profit=current_profit,
+            remaining_daily_risk=remaining_daily_risk,
+            spread=spread,
+            key_levels_str=key_levels_str,
+            consecutive_losses=consecutive_losses,
+            mtf_state=mtf_state,
+            xgb_result=xgb_result,
+            lstm_result=lstm_result,
+        )
+
+    # -----------------------------------------------------------------
+    # v1 prompt (original, backward-compatible)
+    # -----------------------------------------------------------------
 
     prompt = f"""You are a professional intraday scalping analyst for {symbol}.
 Analyze the following market data and decide whether to BUY, SELL, or WAIT.
@@ -321,6 +370,205 @@ RESPONSE FORMAT -- RETURN ONLY VALID JSON, NO MARKDOWN
 
 
 # ---------------------------------------------------------------------------
+# v2 prompt builder (three-brain hybrid)
+# ---------------------------------------------------------------------------
+
+def _build_v2_prompt(
+    *,
+    symbol: str,
+    candles_1m: pd.DataFrame,
+    candles_3m: pd.DataFrame,
+    patterns: list,
+    market_context,
+    sentiment_text: str,
+    account_info: dict,
+    open_positions: list,
+    recent_trades: list,
+    daily_pnl: float,
+    balance: float,
+    equity: float,
+    margin: float,
+    free_margin: float,
+    current_profit: float,
+    remaining_daily_risk: float,
+    spread: float,
+    key_levels_str: str,
+    consecutive_losses: int,
+    mtf_state: MTFState,
+    xgb_result: dict,
+    lstm_result: dict,
+) -> str:
+    """Build the v2 three-brain hybrid prompt with MTF state + ML scores."""
+
+    # --- Multi-timeframe section ---
+    tf = mtf_state.timeframes if hasattr(mtf_state, "timeframes") else {}
+    h1 = tf.get("1H", {}) if isinstance(tf, dict) else {}
+    m15 = tf.get("15M", {}) if isinstance(tf, dict) else {}
+    m3 = tf.get("3M", {}) if isinstance(tf, dict) else {}
+    m1 = tf.get("1M", {}) if isinstance(tf, dict) else {}
+
+    def _tf_line(label: str, d: dict) -> str:
+        if not d:
+            return f"  {label}: (no data)"
+        trend = d.get("trend", "N/A")
+        ema_pos = d.get("ema_position", "N/A")
+        rsi = d.get("rsi", "N/A")
+        atr = d.get("atr", "N/A")
+        structure = d.get("structure", "N/A")
+        return (
+            f"  {label}: trend={trend} | ema_position={ema_pos} | "
+            f"rsi={rsi} | atr={atr} | structure={structure}"
+        )
+
+    mtf_section = "\n".join([
+        _tf_line("1H  (bias)", h1),
+        _tf_line("15M (structure)", m15),
+        _tf_line("3M  (confirmation)", m3),
+        _tf_line("1M  (signal)", m1),
+    ])
+
+    # --- ML model scores section ---
+    xgb_score = xgb_result.get("score", 0.0)
+    xgb_top = xgb_result.get("top_features", [])
+    xgb_features_str = ", ".join(
+        f"{name}={imp}" for name, imp in xgb_top[:5]
+    ) if xgb_top else "N/A"
+
+    lstm_conf = lstm_result.get("confidence", 0.0)
+    lstm_dir = lstm_result.get("direction", "N/A")
+    lstm_regime = lstm_result.get("regime", "N/A")
+
+    # --- Confluence score ---
+    confluence = getattr(mtf_state, "confluence_score", None)
+    if confluence is None:
+        # Compute a simple confluence from available data
+        confluence = round((xgb_score + lstm_conf) / 2.0 * 100, 1)
+    confluence_str = f"{confluence}"
+
+    # --- Setup narrative ---
+    setup_narrative = getattr(mtf_state, "setup_narrative", "N/A")
+
+    # --- Gates summary ---
+    gates_passed = getattr(mtf_state, "gates_passed", False)
+    gate_details = getattr(mtf_state, "gate_details", "")
+
+    prompt = f"""You are an expert scalping trader. You receive a multi-timeframe \
+analysis with pre-computed ML scores. Your job is to make the \
+FINAL decision: trade or wait.
+
+============================================================
+ACCOUNT STATE
+============================================================
+Balance: ${balance:,.2f}
+Equity: ${equity:,.2f}
+Margin Used: ${margin:,.2f}
+Free Margin: ${free_margin:,.2f}
+Open P&L: ${current_profit:,.2f}
+Daily P&L: ${daily_pnl:,.2f}
+Remaining Daily Risk Budget: ${remaining_daily_risk:,.2f}
+Open Positions Count: {len(open_positions)}
+Max Allowed Open Trades: {settings.MAX_OPEN_TRADES}
+
+Open Positions:
+{_format_positions(open_positions)}
+
+============================================================
+MULTI-TIMEFRAME ANALYSIS
+============================================================
+{mtf_section}
+
+Gates Passed: {gates_passed}
+{f"Gate Details: {gate_details}" if gate_details else ""}
+
+============================================================
+ML MODEL SCORES
+============================================================
+XGBoost Score: {xgb_score:.4f}
+  Top Features: {xgb_features_str}
+
+LSTM Confidence: {lstm_conf:.4f}
+  Direction: {lstm_dir}
+  Regime: {lstm_regime}
+
+============================================================
+CONFLUENCE
+============================================================
+Confluence Score: {confluence_str}
+Setup Narrative: {setup_narrative}
+
+============================================================
+MARKET CONTEXT
+============================================================
+Symbol: {symbol}
+Session: {market_context.session}
+Trend (3m structure): {market_context.trend}
+ATR (3m, 14-period): {market_context.atr:.5f}
+Volatility Rank: {market_context.volatility_rank}
+Key Levels: {key_levels_str if key_levels_str else 'None detected'}
+Spread: {spread:.5f}
+
+============================================================
+TECHNICAL INDICATORS -- 1-MINUTE CANDLES (last 5)
+============================================================
+{_format_indicator_table(candles_1m, last_n=5)}
+
+============================================================
+TECHNICAL INDICATORS -- 3-MINUTE CANDLES (last 5)
+============================================================
+{_format_indicator_table(candles_3m, last_n=5)}
+
+============================================================
+DETECTED PATTERNS (most recent first)
+============================================================
+{_format_patterns(patterns)}
+
+============================================================
+NEWS SENTIMENT
+============================================================
+{sentiment_text}
+
+============================================================
+RECENT TRADES ON {symbol} (newest first)
+============================================================
+{_format_recent_trades(recent_trades)}
+Consecutive Losses: {consecutive_losses}
+
+============================================================
+RULES -- YOU MUST FOLLOW THESE
+============================================================
+1. TRADE WITH THE TREND: 1H bias sets direction. Only BUY when 1H+15M are bullish, SELL when bearish.
+2. CONFLUENCE GATE: All three brains (XGBoost, LSTM, your analysis) must agree for a trade. If ML models show conflicting direction, output WAIT.
+3. MINIMUM RISK:REWARD: Every trade must have at least {settings.MIN_RR_RATIO}:1 reward-to-risk ratio.
+4. NEWS BLACKOUT: If sentiment impact is "high" and absolute score > 0.7, output WAIT.
+5. CONSECUTIVE LOSS CHECK: If there are 3+ consecutive losses, output WAIT.
+6. SPREAD CHECK: If spread > ATR * {settings.SPREAD_FILTER_MULTIPLIER}, output WAIT.
+7. DAILY LOSS LIMIT: If remaining daily risk budget <= 0, output WAIT.
+8. MAX POSITIONS: If open positions count >= {settings.MAX_OPEN_TRADES}, output WAIT.
+9. STOP LOSS: Place beyond the nearest structure level or ATR-based distance. Never risk more than {settings.MAX_RISK_PER_TRADE_PCT}% of balance.
+10. TAKE PROFIT: Set TP1 at the nearest structure level (partial close), TP2 at the extended target.
+11. LOT SIZING: Suggest "reduced" if regime is volatile or confluence < 60, "increased" if regime is trending and confluence > 85, otherwise "normal".
+12. RISK WARNINGS: Note any concerns (divergence between ML models, unusual regime, thin liquidity, etc.).
+
+============================================================
+RESPONSE FORMAT -- RETURN ONLY VALID JSON, NO MARKDOWN
+============================================================
+{{
+  "ACTION": "buy" | "sell" | "wait",
+  "CONFIDENCE": <integer 0-100>,
+  "ENTRY_PRICE": <float -- current ask for buy, bid for sell, 0 for wait>,
+  "STOP_LOSS": <float -- price level, 0 for wait>,
+  "TAKE_PROFIT": <float -- price level for TP1, 0 for wait>,
+  "TAKE_PROFIT_2": <float -- price level for TP2 (extended target), 0 for wait>,
+  "LOT_SIZE_SUGGESTION": "normal" | "reduced" | "increased",
+  "RISK_WARNINGS": "<any risk concerns or empty string>",
+  "REASONING": "<2-4 sentences explaining the decision, referencing MTF alignment and ML scores>",
+  "RISK_SCORE": <integer 1-10, where 1=very safe, 10=very risky>
+}}"""
+
+    return prompt
+
+
+# ---------------------------------------------------------------------------
 # Response parser
 # ---------------------------------------------------------------------------
 
@@ -355,6 +603,13 @@ def _parse_response(response_text: str, symbol: str) -> TradeDecision:
         risk_score = int(data.get("RISK_SCORE", 5))
         risk_score = max(1, min(10, risk_score))
 
+        # v2 optional fields
+        take_profit_2 = float(data.get("TAKE_PROFIT_2", 0)) or None
+        lot_size_suggestion = str(data.get("LOT_SIZE_SUGGESTION", "normal")).lower().strip()
+        if lot_size_suggestion not in ("normal", "reduced", "increased"):
+            lot_size_suggestion = "normal"
+        risk_warnings = str(data.get("RISK_WARNINGS", ""))
+
         return TradeDecision(
             action=action,
             confidence=confidence,
@@ -365,6 +620,9 @@ def _parse_response(response_text: str, symbol: str) -> TradeDecision:
             risk_score=risk_score,
             symbol=symbol,
             timeframe="M1",
+            take_profit_2=take_profit_2,
+            lot_size_suggestion=lot_size_suggestion,
+            risk_warnings=risk_warnings,
         )
 
     except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
@@ -387,6 +645,10 @@ async def analyze(
     open_positions: list,
     recent_trades: list,
     daily_pnl: float,
+    *,
+    mtf_state: MTFState | None = None,
+    xgb_result: dict | None = None,
+    lstm_result: dict | None = None,
 ) -> TradeDecision:
     """Run Claude-based analysis and return a structured trade decision.
 
@@ -412,6 +674,12 @@ async def analyze(
         Last 10 closed trades on this symbol (newest first).
     daily_pnl : float
         Realised P&L for the current trading day.
+    mtf_state : MTFState | None
+        v2: Multi-timeframe state from ``MTFAnalyzer.update()``.
+    xgb_result : dict | None
+        v2: XGBoost filter result (``{"score", "pass", "top_features"}``).
+    lstm_result : dict | None
+        v2: LSTM confidence result (``{"direction", "confidence", "regime", "pass"}``).
 
     Returns
     -------
@@ -430,6 +698,9 @@ async def analyze(
         open_positions=open_positions,
         recent_trades=recent_trades,
         daily_pnl=daily_pnl,
+        mtf_state=mtf_state,
+        xgb_result=xgb_result,
+        lstm_result=lstm_result,
     )
 
     try:
