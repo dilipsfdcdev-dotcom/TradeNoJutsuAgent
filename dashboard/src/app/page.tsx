@@ -56,6 +56,8 @@ interface MLScores {
 export default function Home() {
   const [agentStatus, setAgentStatus] = useState<'running' | 'paused' | 'stopped'>('stopped');
   const [dailyPnl, setDailyPnl] = useState<number>(0);
+  const [accountBalance, setAccountBalance] = useState<number>(0);
+  const [accountEquity, setAccountEquity] = useState<number>(0);
   const [activeTrades, setActiveTrades] = useState<ActiveTrade[]>([]);
   const [equityData, setEquityData] = useState<{ time: string; balance: number; equity: number }[]>([]);
   const [metrics, setMetrics] = useState<MetricsData>({
@@ -85,12 +87,13 @@ export default function Home() {
   // Fetch initial data from REST API
   const fetchDashboardData = useCallback(async () => {
     try {
-      const [statusRes, metricsRes, equityRes, newsRes, tradesRes] = await Promise.allSettled([
+      const [statusRes, metricsRes, equityRes, newsRes, tradesRes, accountRes] = await Promise.allSettled([
         fetch(`${API_BASE}/api/agent/status`),
         fetch(`${API_BASE}/api/metrics`),
         fetch(`${API_BASE}/api/equity?days=30`),
         fetch(`${API_BASE}/api/news?limit=10`),
         fetch(`${API_BASE}/api/trades?status=open`),
+        fetch(`${API_BASE}/api/account`),
       ]);
 
       if (statusRes.status === 'fulfilled' && statusRes.value.ok) {
@@ -135,6 +138,14 @@ export default function Home() {
       if (tradesRes.status === 'fulfilled' && tradesRes.value.ok) {
         const data = await tradesRes.value.json();
         setActiveTrades(data);
+      }
+
+      if (accountRes.status === 'fulfilled' && accountRes.value.ok) {
+        const data = await accountRes.value.json();
+        if (data.connected) {
+          setAccountBalance(data.balance ?? 0);
+          setAccountEquity(data.equity ?? 0);
+        }
       }
     } catch {
       // Silently handle fetch errors -- individual panels show empty states
@@ -202,6 +213,18 @@ export default function Home() {
           </span>
         </div>
         <div className="flex items-center gap-4">
+          <div className="text-right">
+            <div className="text-[10px] uppercase text-muted-foreground">Balance</div>
+            <div className="text-sm font-mono font-bold text-foreground">
+              ${(Number(accountBalance) || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] uppercase text-muted-foreground">Equity</div>
+            <div className="text-sm font-mono font-bold text-foreground">
+              ${(Number(accountEquity) || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            </div>
+          </div>
           <div className="text-right">
             <div className="text-[10px] uppercase text-muted-foreground">Today&apos;s P&amp;L</div>
             <div className={`text-sm font-mono font-bold ${pnlColor}`}>
