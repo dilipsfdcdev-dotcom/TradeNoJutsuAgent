@@ -8,16 +8,12 @@ version = "0.1.0"
 description = "AI-powered trading agent"
 requires-python = ">=3.11"
 dependencies = [
-    "MetaTrader5",
     "anthropic",
     "sqlalchemy[asyncio]>=2.0",
     "alembic",
-    "asyncpg",
-    "psycopg2-binary",
     "redis",
     "pandas",
     "numpy",
-    "pandas-ta",
     "apscheduler>=3.10",
     "fastapi",
     "uvicorn[standard]",
@@ -29,12 +25,25 @@ dependencies = [
     "python-dotenv",
     "jinja2",
     "xgboost>=2.0",
-    "torch>=2.0",
     "scikit-learn>=1.3",
-    "shap>=0.43",
 ]
 
 [project.optional-dependencies]
+mt5 = [
+    "MetaTrader5",
+]
+ml = [
+    "torch>=2.0",
+    "shap>=0.43",
+]
+db = [
+    "asyncpg",
+    "psycopg2-binary",
+]
+full = [
+    "trading-agent[mt5,ml,db]",
+    "pandas-ta",
+]
 dev = [
     "pytest",
     "pytest-asyncio",
