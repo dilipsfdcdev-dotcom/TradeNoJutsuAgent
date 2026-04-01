@@ -254,8 +254,10 @@ async def _calendar_refresh() -> None:
 
 
 async def _position_manager_tick() -> None:
-    """Run position management (trailing stops, partial closes, time exits)."""
+    """Run position management and push positions to dashboard."""
     try:
+        from agent.execution.mt5_executor import get_open_positions
+
         # Compute current ATR values for each symbol with open positions
         atr_values: dict[str, float] = {}
         for symbol in settings.symbols_list:
@@ -268,6 +270,32 @@ async def _position_manager_tick() -> None:
                 atr_values[symbol] = float(last_atr)
 
         manage_positions(atr_values)
+
+        # Push open positions to dashboard WebSocket
+        try:
+            from agent.monitoring.websocket_server import push
+            positions = get_open_positions()
+            dashboard_positions = []
+            for pos in positions:
+                tick = get_tick(pos["symbol"])
+                current_price = 0.0
+                if tick:
+                    current_price = tick["ask"] if pos["direction"] == "buy" else tick["bid"]
+                dashboard_positions.append({
+                    "id": str(pos["ticket"]),
+                    "symbol": pos["symbol"],
+                    "side": pos["direction"],
+                    "lots": pos["volume"],
+                    "entry_price": pos["price_open"],
+                    "current_price": current_price,
+                    "sl": pos["sl"],
+                    "tp": pos["tp"],
+                    "pnl": pos["profit"],
+                    "opened_at": pos["time"].isoformat() if hasattr(pos["time"], "isoformat") else str(pos["time"]),
+                })
+            await push("trades", {"positions": dashboard_positions})
+        except Exception:
+            pass
     except Exception:
         log.exception("position_manager.error")
 
@@ -509,13 +537,16 @@ async def _analyse_symbol(symbol: str) -> None:
         log.info("analysis.trading_blocked", symbol=symbol, reason=reason)
         try:
             from agent.monitoring.websocket_server import push
-            await push("signals", {
+            import hashlib as _hs
+            ts = datetime.now(timezone.utc).isoformat()
+            await push("signals", {"signal": {
+                "id": _hs.md5(f"{symbol}{ts}".encode()).hexdigest()[:10],
                 "symbol": symbol,
-                "action": "blocked",
+                "action": "WAIT",
                 "confidence": 0,
                 "reasoning": reason or "Trading blocked",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
+                "timestamp": ts,
+            }})
         except Exception:
             pass
         return
@@ -550,17 +581,16 @@ async def _analyse_symbol(symbol: str) -> None:
     # Push signal to WebSocket for dashboard
     try:
         from agent.monitoring.websocket_server import push
-        await push("signals", {
+        import hashlib as _hs
+        ts = datetime.now(timezone.utc).isoformat()
+        await push("signals", {"signal": {
+            "id": _hs.md5(f"{symbol}{ts}".encode()).hexdigest()[:10],
             "symbol": symbol,
-            "action": decision.action,
-            "confidence": decision.confidence,
+            "action": decision.action.upper(),
+            "confidence": decision.confidence / 100 if decision.confidence > 1 else decision.confidence,
             "reasoning": decision.reasoning or "",
-            "risk_score": getattr(decision, "risk_score", 0),
-            "entry": getattr(decision, "entry", 0),
-            "sl": getattr(decision, "sl", 0),
-            "tp": getattr(decision, "tp", 0),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+            "timestamp": ts,
+        }})
     except Exception:
         pass
 

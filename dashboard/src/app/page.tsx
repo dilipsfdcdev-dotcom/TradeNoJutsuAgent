@@ -73,7 +73,7 @@ export default function Home() {
   });
   const [news, setNews] = useState<NewsItem[]>([]);
 
-  const { data: positionsData } = useWebSocket<PositionsMessage>('positions');
+  const { data: positionsData } = useWebSocket<PositionsMessage>('trades');
   const { data: mtfData } = useWebSocket<MTFData>('mtf_state');
   const { data: mlData } = useWebSocket<MLScores>('ml_scores');
 
