@@ -141,8 +141,14 @@ export default function LiveChart({ symbol: initialSymbol, activeTrades = [] }: 
     const lines: ReturnType<typeof series.createPriceLine>[] = [];
 
     activeTrades.forEach((trade) => {
+      const entry = Number(trade.entry) || 0;
+      const sl = Number(trade.sl) || 0;
+      const tp = Number(trade.tp) || 0;
+
+      if (!entry) return; // skip trades with no valid entry price
+
       const entryLine = series.createPriceLine({
-        price: trade.entry,
+        price: entry,
         color: '#3b82f6',
         lineWidth: 2,
         lineStyle: LineStyle.Solid,
@@ -152,7 +158,7 @@ export default function LiveChart({ symbol: initialSymbol, activeTrades = [] }: 
       lines.push(entryLine);
 
       const slLine = series.createPriceLine({
-        price: trade.sl,
+        price: sl,
         color: '#ef4444',
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,
@@ -162,7 +168,7 @@ export default function LiveChart({ symbol: initialSymbol, activeTrades = [] }: 
       lines.push(slLine);
 
       const tpLine = series.createPriceLine({
-        price: trade.tp,
+        price: tp,
         color: '#22c55e',
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,

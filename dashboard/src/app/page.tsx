@@ -174,9 +174,9 @@ export default function Home() {
 
   // Build trade markers for chart
   const tradeMarkers = activeTrades.map((t: ActiveTrade) => ({
-    entry: t.entry_price,
-    sl: t.sl,
-    tp: t.tp,
+    entry: Number(t.entry_price) || 0,
+    sl: Number(t.sl) || 0,
+    tp: Number(t.tp) || 0,
     side: t.side,
   }));
 

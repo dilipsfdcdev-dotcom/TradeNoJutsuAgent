@@ -206,7 +206,7 @@ async def _price_feed_tick() -> None:
 
 
 async def _price_feed_candles() -> None:
-    """Fetch candles for every symbol/TF combo and cache in Redis."""
+    """Fetch candles for every symbol/TF combo and cache in Redis + push to WebSocket."""
     global _redis
     if _redis is None:
         return
@@ -225,6 +225,34 @@ async def _price_feed_candles() -> None:
                 key = f"candles:{symbol}:{tf}"
                 await _redis.set(key, payload)
                 await _redis.publish(f"candles_update:{symbol}:{tf}", payload)
+
+                # Push M1 candles to WebSocket for dashboard chart
+                if tf == "M1":
+                    try:
+                        from agent.monitoring.websocket_server import push
+                        candle_list = json.loads(payload)
+                        # Convert to lightweight-charts format
+                        chart_candles = []
+                        for c in candle_list[-100:]:
+                            try:
+                                from datetime import datetime as _dt
+                                ts = int(_dt.fromisoformat(str(c["time"]).replace(" ", "T")).timestamp())
+                                chart_candles.append({
+                                    "time": ts,
+                                    "open": float(c["open"]),
+                                    "high": float(c["high"]),
+                                    "low": float(c["low"]),
+                                    "close": float(c["close"]),
+                                })
+                            except (ValueError, KeyError):
+                                continue
+                        if chart_candles:
+                            await push("prices", {
+                                "symbol": symbol,
+                                "candles": chart_candles,
+                            })
+                    except Exception:
+                        pass
             except Exception:
                 log.exception("price_feed.candle_error", symbol=symbol, tf=tf)
 
@@ -447,13 +475,11 @@ async def _analyse_symbol(symbol: str) -> None:
         except Exception:
             log.exception("analysis.mtf_update_error", symbol=symbol)
 
-    # v2 Step 2: If MTF gates didn't pass, skip ML brains
+    # v2 Step 2: Log MTF gate status but continue to Claude analysis
     if mtf_state is not None and not mtf_state.gates_passed:
-        log.info("analysis.mtf_gates_blocked", symbol=symbol,
-                 gate_details=getattr(mtf_state, "gate_details", ""))
-        # Push mtf_state to WebSocket even when blocked
-        await _publish_v2_state(symbol, mtf_state=mtf_state)
-        return
+        log.debug("analysis.mtf_gates_info", symbol=symbol,
+                  gate_details=getattr(mtf_state, "gate_details", ""))
+        # Don't return — let Claude decide based on full context
 
     # =====================================================================
     # v2 Step 3: Brain 1 -- XGBoost filter
