@@ -573,7 +573,7 @@ async def _analyse_symbol(symbol: str) -> None:
     # =====================================================================
     # v2 Step 7: Trade execution
     # =====================================================================
-    if decision.action == "wait" or decision.confidence < 70:
+    if decision.action == "wait" or decision.confidence < 40:
         return
 
     max_daily_loss = balance * (settings.MAX_DAILY_LOSS_PCT / 100.0)
@@ -1129,12 +1129,13 @@ def _init_v2_models() -> None:
             model_path=str(xgb_path) if xgb_path.exists() else None,
         )
 
-        # LSTM
-        lstm_path = models_dir / f"lstm_{symbol}.pt"
-        _lstm_models[symbol] = LSTMConfidence(
-            symbol=symbol,
-            model_path=str(lstm_path) if lstm_path.exists() else None,
-        )
+        # LSTM (optional — torch may not be installed)
+        if LSTMConfidence is not None:
+            lstm_path = models_dir / f"lstm_{symbol}.pt"
+            _lstm_models[symbol] = LSTMConfidence(
+                symbol=symbol,
+                model_path=str(lstm_path) if lstm_path.exists() else None,
+            )
 
     _mtf_analyzer = MTFAnalyzer()
 
@@ -1289,17 +1290,17 @@ async def main() -> None:
     _scheduler.add_job(
         _price_feed_tick,
         "interval",
-        seconds=1,
+        seconds=2,
         id="price_feed_tick",
-        max_instances=1,
+        max_instances=2,
         misfire_grace_time=5,
     )
     _scheduler.add_job(
         _price_feed_candles,
         "interval",
-        seconds=5,
+        seconds=10,
         id="price_feed_candles",
-        max_instances=1,
+        max_instances=2,
         misfire_grace_time=10,
     )
 

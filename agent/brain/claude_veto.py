@@ -36,7 +36,17 @@ _MAX_CONSECUTIVE_FAILURES = 5
 
 VETO_PROMPT = """You are a risk oversight system for an automated scalping bot.
 The bot trades XAUUSD, BTCUSD, XAGUSD on 1M/3M using ML models.
-Your job is NOT to find trades. Your job is to PREVENT BAD trades.
+
+IMPORTANT: Your DEFAULT should be ALLOW. Only use REDUCE or BLOCK for truly
+dangerous situations like:
+  - Account drawdown > 5%
+  - 5+ consecutive losses
+  - Obvious flash crash / extreme illiquidity
+
+Do NOT block or reduce for:
+  - Normal news events (the bot handles these)
+  - ML accuracy at baseline 50% (models are new, this is expected)
+  - Regular market volatility
 
 ## Current time: {utc_time}
 ## Session: {session}
@@ -61,16 +71,9 @@ Your job is NOT to find trades. Your job is to PREVENT BAD trades.
 
 ## Your task:
 For EACH symbol, respond with ONE of:
-  ALLOW — no concerns, let ML trade normally
-  REDUCE:0.5 — reduce size to 50% (give reason)
-  BLOCK:minutes — block trading for N minutes (give reason)
-
-Focus on things ML CANNOT detect:
-  - Upcoming news events that will spike volatility
-  - Unusual spread widening (illiquidity)
-  - Weekend/holiday risk approaching
-  - Signs of ML model overfitting (accuracy dropping)
-  - Account state warranting caution
+  ALLOW — let ML trade normally (this should be your default)
+  REDUCE:0.5 — reduce size to 50% (only for real danger)
+  BLOCK:minutes — block trading (only for extreme situations)
 
 Respond in JSON only:
 {{

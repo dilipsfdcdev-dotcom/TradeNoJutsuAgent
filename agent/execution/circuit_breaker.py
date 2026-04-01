@@ -205,22 +205,20 @@ class CircuitBreaker:
     def check_time_restrictions(
         self, upcoming_events: list | None = None
     ) -> tuple[bool, str]:
-        """Block during high-impact news windows and late-Friday sessions."""
-        # High-impact events
+        """Log high-impact news windows but allow trading to continue.
+
+        Previously this method blocked all trades during high-impact event
+        windows.  Now it only logs a warning so the agent can still take
+        high-confidence setups.
+        """
         if upcoming_events:
             for event in upcoming_events:
                 if self._is_high_impact_window(event):
-                    return False, (
-                        f"High-impact event window: "
-                        f"{event.get('title', 'unknown')}"
+                    log.warning(
+                        "circuit_breaker.high_impact_event_nearby",
+                        event=event.get("title", "unknown"),
+                        hint="Trading allowed — reduce size if needed",
                     )
-
-        # Friday close risk reduction is handled by the caller via
-        # ``is_friday_close()``; here we simply flag it.
-        if self.is_friday_close():
-            return False, (
-                "Friday 3 PM+ EST — reduce risk by 50% or skip new trades"
-            )
 
         return True, ""
 
