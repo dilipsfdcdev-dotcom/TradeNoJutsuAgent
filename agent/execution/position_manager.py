@@ -241,8 +241,8 @@ def check_time_exits() -> list[int]:
         ticket: int = pos.get("ticket")
         symbol: str = pos.get("symbol", "")
         direction: str = pos.get("direction", "buy")
-        entry_price: float = pos.get("entry_price", 0.0)
-        open_time = pos.get("open_time")
+        entry_price: float = pos.get("price_open", pos.get("entry_price", 0.0))
+        open_time = pos.get("time", pos.get("open_time"))
 
         if open_time is None or ticket is None:
             continue
@@ -316,11 +316,11 @@ def manage_positions(atr_values: dict[str, float]) -> None:
         ticket: int = pos.get("ticket")
         symbol: str = pos.get("symbol", "")
         direction: str = pos.get("direction", "buy")
-        entry_price: float = pos.get("entry_price", 0.0)
+        entry_price: float = pos.get("price_open", pos.get("entry_price", 0.0))
         sl_price: float = pos.get("sl", 0.0)
         tp_price: float = pos.get("tp", 0.0)
         tp2_price: float = pos.get("tp2", 0.0)
-        open_time = pos.get("open_time")
+        open_time = pos.get("time", pos.get("open_time"))
 
         if ticket is None:
             continue
