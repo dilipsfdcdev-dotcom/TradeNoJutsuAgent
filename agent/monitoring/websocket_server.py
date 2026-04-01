@@ -321,28 +321,82 @@ def create_app() -> FastAPI:
     async def get_all_settings(
         session: AsyncSession = Depends(get_session),
     ) -> dict:
-        """Return all current settings for the setup page."""
+        """Return all current settings for the setup page.
+
+        Returns a nested structure matching the dashboard SetupSettings type.
+        """
         result = await session.execute(select(Setting))
         rows = result.scalars().all()
         db_settings = {r.key: r.value for r in rows}
+
+        paused = db_settings.get("agent_paused", {}).get("paused", False)
+
+        # Check live connection health
+        connection_health: dict[str, bool] = {
+            "mt5": False,
+            "database": False,
+            "redis": False,
+        }
+        try:
+            from agent.data.mt5_feed import _ensure_connected
+            connection_health["mt5"] = _ensure_connected()
+        except Exception:
+            pass
+        try:
+            connection_health["database"] = True  # we're using the DB right now
+        except Exception:
+            pass
+        try:
+            import redis.asyncio as aioredis
+            r = aioredis.from_url(settings.REDIS_URL)
+            await r.ping()
+            await r.aclose()
+            connection_health["redis"] = True
+        except Exception:
+            pass
+
+        # Parse symbols and timeframes into the list format the dashboard expects
+        symbols_list = [
+            {"symbol": s.strip(), "enabled": True}
+            for s in settings.SYMBOLS.split(",") if s.strip()
+        ]
+        timeframes_list = [
+            {"timeframe": t.strip(), "enabled": True}
+            for t in settings.TIMEFRAMES.split(",") if t.strip()
+        ]
+
         return _serialise({
-            "MT5_LOGIN": settings.MT5_LOGIN,
-            "MT5_SERVER": settings.MT5_SERVER,
-            "MT5_PATH": settings.MT5_PATH,
-            "ANTHROPIC_API_KEY": settings.ANTHROPIC_API_KEY[:8] + "..." if settings.ANTHROPIC_API_KEY else "",
-            "CLAUDE_MODEL": settings.CLAUDE_MODEL,
-            "DATABASE_URL": settings.DATABASE_URL,
-            "REDIS_URL": settings.REDIS_URL,
-            "NEWS_API_KEY": settings.NEWS_API_KEY[:8] + "..." if settings.NEWS_API_KEY else "",
-            "MAX_RISK_PER_TRADE_PCT": settings.MAX_RISK_PER_TRADE_PCT,
-            "MAX_DAILY_LOSS_PCT": settings.MAX_DAILY_LOSS_PCT,
-            "MAX_OPEN_TRADES": settings.MAX_OPEN_TRADES,
-            "MAX_DRAWDOWN_PCT": settings.MAX_DRAWDOWN_PCT,
-            "MIN_RR_RATIO": settings.MIN_RR_RATIO,
-            "SPREAD_FILTER_MULTIPLIER": settings.SPREAD_FILTER_MULTIPLIER,
-            "SYMBOLS": settings.SYMBOLS,
-            "TIMEFRAMES": settings.TIMEFRAMES,
-            "agent_paused": db_settings.get("agent_paused", {}).get("paused", False),
+            "mt5": {
+                "login": settings.MT5_LOGIN,
+                "password": "",  # never send password to frontend
+                "server": settings.MT5_SERVER,
+                "terminal_path": settings.MT5_PATH,
+            },
+            "claude": {
+                "api_key": (settings.ANTHROPIC_API_KEY[:8] + "...")
+                           if settings.ANTHROPIC_API_KEY else "",
+                "model": settings.CLAUDE_MODEL,
+            },
+            "database": {
+                "postgres_url": settings.DATABASE_URL,
+                "redis_url": settings.REDIS_URL,
+            },
+            "news": {
+                "api_key": (settings.NEWS_API_KEY[:8] + "...")
+                           if settings.NEWS_API_KEY else "",
+            },
+            "risk": {
+                "max_risk_per_trade": settings.MAX_RISK_PER_TRADE_PCT,
+                "max_daily_loss": settings.MAX_DAILY_LOSS_PCT,
+                "max_open_trades": settings.MAX_OPEN_TRADES,
+                "max_drawdown": settings.MAX_DRAWDOWN_PCT,
+                "min_rr_ratio": settings.MIN_RR_RATIO,
+                "spread_filter_multiplier": settings.SPREAD_FILTER_MULTIPLIER,
+            },
+            "symbols": symbols_list,
+            "timeframes": timeframes_list,
+            "agent_status": "paused" if paused else "running",
+            "connection_health": connection_health,
         })
 
     @app.post("/api/test-mt5")
@@ -358,13 +412,33 @@ def create_app() -> FastAPI:
                 object.__setattr__(settings, "MT5_PASSWORD", payload["password"])
             if payload.get("server"):
                 object.__setattr__(settings, "MT5_SERVER", payload["server"])
-            if payload.get("path"):
-                object.__setattr__(settings, "MT5_PATH", payload["path"])
+            if payload.get("path") or payload.get("terminal_path"):
+                object.__setattr__(settings, "MT5_PATH", payload.get("path") or payload["terminal_path"])
 
             connected = init_mt5()
             if connected:
                 info = get_account_info()
-                return _serialise({"connected": True, "account": info})
+                try:
+                    import MetaTrader5 as _mt5
+                    tinfo = _mt5.terminal_info()
+                    broker = getattr(tinfo, "company", "") or settings.MT5_SERVER
+                    ainfo = _mt5.account_info()
+                    acct_type = getattr(ainfo, "margin_mode", "")
+                    # margin_mode: 0=Netting, 2=Hedging, 1=Exchange
+                    mode_map = {0: "Netting", 1: "Exchange", 2: "Hedge"}
+                    acct_type = mode_map.get(acct_type, str(acct_type))
+                except Exception:
+                    broker = settings.MT5_SERVER
+                    acct_type = "N/A"
+                return _serialise({
+                    "connected": True,
+                    "account_info": {
+                        "balance": info.get("balance", 0),
+                        "equity": info.get("equity", 0),
+                        "broker": broker,
+                        "account_type": acct_type,
+                    },
+                })
             return {"connected": False, "error": "Failed to connect to MT5"}
         except Exception as e:
             return {"connected": False, "error": str(e)}
@@ -387,12 +461,52 @@ def create_app() -> FastAPI:
 
     @app.post("/api/test-db")
     async def test_db(session: AsyncSession = Depends(get_session)) -> dict:
-        """Test database connectivity."""
+        """Test database and Redis connectivity."""
+        pg_ok = False
+        redis_ok = False
+        error_msg = None
+
+        # Test PostgreSQL
         try:
             await session.execute(select(func.count(Trade.id)))
-            return {"postgresql": True, "error": None}
+            pg_ok = True
         except Exception as e:
-            return {"postgresql": False, "error": str(e)}
+            error_msg = f"PostgreSQL: {e}"
+
+        # Test Redis
+        try:
+            import redis.asyncio as aioredis
+            r = aioredis.from_url(settings.REDIS_URL)
+            await r.ping()
+            await r.aclose()
+            redis_ok = True
+        except Exception as e:
+            redis_err = f"Redis: {e}"
+            error_msg = f"{error_msg}; {redis_err}" if error_msg else redis_err
+
+        return {
+            "postgres": pg_ok,
+            "redis": redis_ok,
+            "error": error_msg,
+        }
+
+    @app.post("/api/test-news")
+    async def test_news(payload: dict) -> dict:
+        """Test News API connectivity."""
+        try:
+            import httpx
+            api_key = payload.get("api_key", settings.NEWS_API_KEY)
+            if not api_key:
+                return {"connected": False, "error": "No NEWS_API_KEY set"}
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    "https://newsapi.org/v2/everything",
+                    params={"q": "gold", "pageSize": 1, "apiKey": api_key},
+                )
+                resp.raise_for_status()
+                return {"connected": True}
+        except Exception as e:
+            return {"connected": False, "error": str(e)}
 
     @app.get("/api/health")
     async def health() -> dict:
