@@ -13,8 +13,13 @@ def load_from_mt5(symbol: str, timeframe: str, start: datetime, end: datetime) -
 
     Returns DataFrame with columns: time, open, high, low, close, volume, spread
     """
-    import MetaTrader5 as mt5
     from agent.data.mt5_feed import TF_MAP, init_mt5
+
+    try:
+        import MetaTrader5 as mt5
+    except ImportError:
+        logger.error("mt5.import_failed", hint="MetaTrader5 package not installed")
+        return pd.DataFrame()
 
     init_mt5()
     tf = TF_MAP.get(timeframe, mt5.TIMEFRAME_M1)
