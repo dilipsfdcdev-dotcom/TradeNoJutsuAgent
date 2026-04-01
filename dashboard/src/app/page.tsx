@@ -77,11 +77,15 @@ export default function Home() {
   const { data: mtfData } = useWebSocket<MTFData>('mtf_state');
   const { data: mlData } = useWebSocket<MLScores>('ml_scores');
 
-  // Update active trades from WebSocket
+  // Update active trades from WebSocket (avoid unnecessary re-renders)
   useEffect(() => {
-    if (positionsData?.positions) {
-      setActiveTrades(positionsData.positions);
-    }
+    if (!positionsData?.positions) return;
+    setActiveTrades((prev) => {
+      const next = positionsData.positions;
+      // Only update if the data actually changed
+      if (JSON.stringify(prev) === JSON.stringify(next)) return prev;
+      return next;
+    });
   }, [positionsData]);
 
   // Fetch initial data from REST API

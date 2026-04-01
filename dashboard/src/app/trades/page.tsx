@@ -362,7 +362,7 @@ export default function TradesPage() {
                         </td>
                         <td className="px-3 py-2.5">
                           {trade.confidence != null
-                            ? `${((Number(trade.confidence) || 0) * 100).toFixed(0)}%`
+                            ? `${(Number(trade.confidence) || 0).toFixed(0)}%`
                             : '-'}
                         </td>
                         <td className="px-3 py-2.5">
