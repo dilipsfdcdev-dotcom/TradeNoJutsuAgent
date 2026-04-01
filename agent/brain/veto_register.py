@@ -7,6 +7,8 @@ Backed by Redis for persistence, falls back to in-memory dict.
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+import asyncio
+import inspect
 import json
 import structlog
 
@@ -20,7 +22,7 @@ class VetoState:
     risk_modifier: float = 1.0      # 1.0 = normal, 0.5 = half, 0 = blocked
     expires_at: Optional[datetime] = None
     source: str = ""
-    set_at: datetime = field(default_factory=datetime.utcnow)
+    set_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> dict:
         return {
@@ -42,6 +44,20 @@ class VetoState:
             source=data.get("source", ""),
             set_at=datetime.fromisoformat(sat) if sat else datetime.now(timezone.utc),
         )
+
+
+def _fire_and_forget(coro):
+    """Schedule an async coroutine without waiting for it.
+
+    Works when called from sync code running inside an async event loop
+    (e.g. via APScheduler or sync callbacks on the main loop).
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(coro)
+    except RuntimeError:
+        # No running loop – nothing we can do; local dict is the fallback.
+        pass
 
 
 class VetoRegister:
@@ -99,19 +115,8 @@ class VetoRegister:
         return dict(self._local)
 
     def _get(self, symbol: str) -> VetoState | None:
-        # Try Redis first
-        if self._redis:
-            try:
-                raw = self._redis.get(f"{self._REDIS_PREFIX}{symbol}")
-                if raw:
-                    data = json.loads(raw)
-                    state = VetoState.from_dict(data)
-                    # Sync to local cache
-                    self._local[symbol] = state
-                    return state
-            except Exception:
-                # Redis down -- fall through to local
-                pass
+        # Redis reads are async — skip for sync fast-loop reads and
+        # rely on the local cache which is kept in sync by _set.
         return self._local.get(symbol)
 
     def _set(self, symbol: str, state: VetoState) -> None:
@@ -119,12 +124,16 @@ class VetoRegister:
         if self._redis:
             try:
                 payload = json.dumps(state.to_dict())
-                # TTL: if expires_at is set use it, otherwise 24h default
                 if state.expires_at:
                     ttl_secs = max(int((state.expires_at - datetime.now(timezone.utc)).total_seconds()), 60)
                 else:
                     ttl_secs = 86400
-                self._redis.setex(f"{self._REDIS_PREFIX}{symbol}", ttl_secs, payload)
+
+                coro = self._redis.setex(
+                    f"{self._REDIS_PREFIX}{symbol}", ttl_secs, payload,
+                )
+                if inspect.isawaitable(coro):
+                    _fire_and_forget(coro)
             except Exception as exc:
                 logger.warning("redis_veto_set_failed", symbol=symbol, error=str(exc))
 
@@ -132,7 +141,9 @@ class VetoRegister:
         self._local.pop(symbol, None)
         if self._redis:
             try:
-                self._redis.delete(f"{self._REDIS_PREFIX}{symbol}")
+                coro = self._redis.delete(f"{self._REDIS_PREFIX}{symbol}")
+                if inspect.isawaitable(coro):
+                    _fire_and_forget(coro)
             except Exception:
                 pass
 

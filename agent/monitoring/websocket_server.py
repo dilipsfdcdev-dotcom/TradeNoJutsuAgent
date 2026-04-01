@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -397,6 +398,64 @@ def create_app() -> FastAPI:
     async def health() -> dict:
         """Basic health check endpoint."""
         return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+    @app.get("/api/agent/status")
+    async def agent_status(
+        session: AsyncSession = Depends(get_session),
+    ) -> dict:
+        """Return current agent status (running / paused / stopped)."""
+        try:
+            result = await session.execute(
+                select(Setting).where(Setting.key == "agent_paused")
+            )
+            row = result.scalar_one_or_none()
+            if row and row.value.get("paused", False):
+                return {"status": "paused"}
+            return {"status": "running"}
+        except Exception:
+            return {"status": "running"}
+
+    @app.get("/api/equity")
+    async def get_equity(
+        days: int = Query(30, ge=1, le=365),
+        session: AsyncSession = Depends(get_session),
+    ) -> list[dict]:
+        """Alias for equity-curve, matching the dashboard's expected path."""
+        since = date.today() - timedelta(days=days)
+        result = await session.execute(
+            select(DailySummary)
+            .where(DailySummary.date >= since)
+            .order_by(DailySummary.date)
+        )
+        rows = result.scalars().all()
+        return [
+            _serialise(
+                {
+                    "date": r.date,
+                    "starting_balance": r.starting_balance,
+                    "ending_balance": r.ending_balance,
+                    "net_pnl": r.net_pnl,
+                    "max_drawdown_pct": r.max_drawdown_pct,
+                    "total_trades": r.total_trades,
+                    "winning_trades": r.winning_trades,
+                    "losing_trades": r.losing_trades,
+                }
+            )
+            for r in rows
+        ]
+
+    @app.get("/api/news")
+    async def get_news(limit: int = Query(10, ge=1, le=100)) -> list[dict]:
+        """Return cached news items from Redis."""
+        try:
+            import redis.asyncio as aioredis
+            from agent.data.news_feed import NEWS_CACHE_KEY
+            r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+            raw = await r.zrevrange(NEWS_CACHE_KEY, 0, limit - 1)
+            await r.aclose()
+            return [json.loads(item) for item in raw]
+        except Exception:
+            return []
 
     @app.get("/api/veto-status")
     async def get_veto_status() -> dict:
