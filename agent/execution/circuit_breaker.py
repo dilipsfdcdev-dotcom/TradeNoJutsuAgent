@@ -86,23 +86,8 @@ class CircuitBreaker:
             self.total_loss_streak = 0
             log.info("circuit_breaker.global_pause_expired")
 
-        checks: list[tuple[bool, str]] = [
-            self.check_daily_loss(daily_pnl, account_info.get("balance", 0.0)),
-            self.check_consecutive_losses(symbol),
-            self.check_drawdown(account_info),
-            self.check_spread(symbol, current_spread, avg_spread),
-            self.check_time_restrictions(upcoming_events),
-        ]
-
-        for allowed, reason in checks:
-            if not allowed:
-                log.warning(
-                    "circuit_breaker.blocked",
-                    symbol=symbol,
-                    reason=reason,
-                )
-                return False, reason
-
+        # All safety checks disabled per user configuration.
+        # Only the agent_disabled flag and global pause remain active.
         return True, ""
 
     # ---- individual checks -------------------------------------------------

@@ -344,11 +344,9 @@ RULES -- YOU MUST FOLLOW THESE
 ============================================================
 1. TRADE WITH THE TREND: Only take BUY signals in a bullish trend, SELL in bearish. In ranging markets, only take high-confidence setups (>= 80).
 2. MINIMUM RISK:REWARD: Every trade must have at least {settings.MIN_RR_RATIO}:1 reward-to-risk ratio. Calculate (TP - Entry) / (Entry - SL) for buys.
-3. NEWS BLACKOUT: If sentiment impact is "high" and absolute score > 0.7, output WAIT -- the market is too volatile around news.
-4. CONSECUTIVE LOSS CHECK: If there are 3+ consecutive losses, output WAIT to break the losing streak.
-5. SPREAD CHECK: If spread > ATR * {settings.SPREAD_FILTER_MULTIPLIER}, output WAIT -- spread is too wide.
-6. DAILY LOSS LIMIT: If remaining daily risk budget <= 0, output WAIT -- daily loss limit reached.
-7. MAX POSITIONS: If open positions count >= {settings.MAX_OPEN_TRADES}, output WAIT.
+3. Use news sentiment as context but do NOT block trades based on news alone.
+4. Use recent trade history as context for position sizing, not for blocking.
+5. Focus on technical setups -- if there is a valid entry, take it.
 8. STOP LOSS: Must be placed beyond the nearest structure level or ATR-based distance. Never risk more than {settings.MAX_RISK_PER_TRADE_PCT}% of balance.
 9. TAKE PROFIT: Place at the next key level or ATR-multiple target. Must respect minimum R:R.
 10. CONFIDENCE: Be honest about confidence. Only HIGH confidence (>= 70) trades should be executed.
@@ -539,11 +537,9 @@ RULES -- YOU MUST FOLLOW THESE
 1. TRADE WITH THE TREND: 1H bias sets direction. Only BUY when 1H+15M are bullish, SELL when bearish.
 2. CONFLUENCE GATE: All three brains (XGBoost, LSTM, your analysis) must agree for a trade. If ML models show conflicting direction, output WAIT.
 3. MINIMUM RISK:REWARD: Every trade must have at least {settings.MIN_RR_RATIO}:1 reward-to-risk ratio.
-4. NEWS BLACKOUT: If sentiment impact is "high" and absolute score > 0.7, output WAIT.
-5. CONSECUTIVE LOSS CHECK: If there are 3+ consecutive losses, output WAIT.
-6. SPREAD CHECK: If spread > ATR * {settings.SPREAD_FILTER_MULTIPLIER}, output WAIT.
-7. DAILY LOSS LIMIT: If remaining daily risk budget <= 0, output WAIT.
-8. MAX POSITIONS: If open positions count >= {settings.MAX_OPEN_TRADES}, output WAIT.
+4. Use news sentiment as context but do NOT block trades based on news alone.
+5. Use recent trade history as context for sizing, not blocking.
+6. Focus on technical setups -- if there is a valid entry, take it.
 9. STOP LOSS: Place beyond the nearest structure level or ATR-based distance. Never risk more than {settings.MAX_RISK_PER_TRADE_PCT}% of balance.
 10. TAKE PROFIT: Set TP1 at the nearest structure level (partial close), TP2 at the extended target.
 11. LOT SIZING: Suggest "reduced" if regime is volatile or confluence < 60, "increased" if regime is trending and confluence > 85, otherwise "normal".
