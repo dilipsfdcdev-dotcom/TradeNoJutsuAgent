@@ -143,7 +143,7 @@ def _move_to_breakeven(
         new_sl = entry_price - pip
 
     new_sl = round(new_sl, 5)
-    ok = modify_order(ticket, sl=new_sl)
+    ok = modify_order(ticket, new_sl=new_sl)
     if ok:
         log.info(
             "sl_moved_to_breakeven",
@@ -186,7 +186,7 @@ def trail_stop(
     else:
         new_sl = round(current_price + trail_distance, 5)
 
-    ok = modify_order(ticket, sl=new_sl)
+    ok = modify_order(ticket, new_sl=new_sl)
     if ok:
         log.info(
             "sl_trailed",
