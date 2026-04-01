@@ -692,14 +692,6 @@ async def _analyse_symbol(symbol: str) -> None:
             "sentiment_score": sentiment.score if sentiment else None,
             "patterns_detected": [p.type for p in patterns[:5]],
             "ai_reasoning": decision.reasoning,
-            # v2: ML metadata for post-trade review and label generation
-            "xgb_score": xgb_result["score"] if xgb_result else None,
-            "lstm_confidence": lstm_result["confidence"] if lstm_result else None,
-            "lstm_direction": lstm_result["direction"] if lstm_result else None,
-            "lstm_regime": lstm_result["regime"] if lstm_result else None,
-            "mtf_confluence": getattr(mtf_state, "confluence_score", None) if mtf_state else None,
-            "lot_size_suggestion": decision.lot_size_suggestion,
-            "risk_warnings": decision.risk_warnings,
         }
 
         async with async_session() as db:

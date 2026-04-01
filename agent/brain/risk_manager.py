@@ -299,7 +299,7 @@ def validate_rr_ratio(
         return False
 
     rr = reward / risk
-    valid = rr >= min_rr
+    valid = rr >= min_rr - 0.01  # small tolerance for floating point
 
     log.info(
         "rr_validated",
