@@ -533,11 +533,11 @@ export default function SetupPage() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
             <div className="px-3 py-2 rounded-lg bg-muted/50 border border-border">
               <p className="text-xs text-muted-foreground">Balance</p>
-              <p className="text-sm font-medium">${mt5AccountInfo.balance.toLocaleString()}</p>
+              <p className="text-sm font-medium">${(Number(mt5AccountInfo.balance) || 0).toLocaleString()}</p>
             </div>
             <div className="px-3 py-2 rounded-lg bg-muted/50 border border-border">
               <p className="text-xs text-muted-foreground">Equity</p>
-              <p className="text-sm font-medium">${mt5AccountInfo.equity.toLocaleString()}</p>
+              <p className="text-sm font-medium">${(Number(mt5AccountInfo.equity) || 0).toLocaleString()}</p>
             </div>
             <div className="px-3 py-2 rounded-lg bg-muted/50 border border-border">
               <p className="text-xs text-muted-foreground">Broker</p>

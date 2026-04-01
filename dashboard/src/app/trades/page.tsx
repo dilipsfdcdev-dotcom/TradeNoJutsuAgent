@@ -361,13 +361,13 @@ export default function TradesPage() {
                           {formatNum(trade.rr_ratio)}
                         </td>
                         <td className="px-3 py-2.5">
-                          {trade.confidence !== undefined
-                            ? `${(trade.confidence * 100).toFixed(0)}%`
+                          {trade.confidence != null
+                            ? `${((Number(trade.confidence) || 0) * 100).toFixed(0)}%`
                             : '-'}
                         </td>
                         <td className="px-3 py-2.5">
-                          {trade.quality !== undefined
-                            ? `${trade.quality.toFixed(1)}/10`
+                          {trade.quality != null
+                            ? `${(Number(trade.quality) || 0).toFixed(1)}/10`
                             : '-'}
                         </td>
                         <td className="px-3 py-2.5">

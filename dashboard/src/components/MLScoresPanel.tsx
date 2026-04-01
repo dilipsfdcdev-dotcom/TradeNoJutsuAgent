@@ -30,12 +30,14 @@ function regimeBadge(regime: string) {
   return { color: 'bg-gray-500/10 text-gray-400 border-gray-500/30', label: regime.toUpperCase() };
 }
 
-function ScoreBar({ label, score, threshold, pass }: {
+function ScoreBar({ label, score: rawScore, threshold: rawThreshold, pass }: {
   label: string;
   score: number;
   threshold: number;
   pass: boolean;
 }) {
+  const score = Number(rawScore) || 0;
+  const threshold = Number(rawThreshold) || 0;
   const pct = Math.min(100, Math.max(0, score * 100));
   const threshPct = Math.min(100, Math.max(0, threshold * 100));
 
@@ -84,7 +86,7 @@ function TrendIndicator({ history, label }: { history: number[]; label: string }
           return (
             <span key={i} className="flex items-center gap-0.5">
               {i > 0 && <span className={`text-[10px] ${trendColor}`}>{arrow}</span>}
-              <span className={`font-bold ${trendColor}`}>{val.toFixed(2)}</span>
+              <span className={`font-bold ${trendColor}`}>{(Number(val) || 0).toFixed(2)}</span>
             </span>
           );
         })}
@@ -156,7 +158,7 @@ export default function MLScoresPanel({ data, symbol }: MLScoresPanelProps) {
                     className="inline-flex items-center gap-1 text-[10px] font-mono bg-muted/50 border border-border rounded px-1.5 py-0.5"
                   >
                     <span className="text-foreground">{name}</span>
-                    <span className="text-muted-foreground">({(importance * 100).toFixed(0)}%)</span>
+                    <span className="text-muted-foreground">({((Number(importance) || 0) * 100).toFixed(0)}%)</span>
                   </span>
                 ))}
               </div>

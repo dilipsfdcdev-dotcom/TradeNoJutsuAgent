@@ -341,7 +341,7 @@ export default function BacktestPage() {
                     results.win_rate >= 50 ? 'text-profit' : 'text-loss'
                   }`}
                 >
-                  {results.win_rate.toFixed(1)}%
+                  {(Number(results.win_rate) || 0).toFixed(1)}%
                 </p>
               </div>
 
@@ -355,7 +355,7 @@ export default function BacktestPage() {
                     results.profit_factor >= 1 ? 'text-profit' : 'text-loss'
                   }`}
                 >
-                  {results.profit_factor.toFixed(2)}
+                  {(Number(results.profit_factor) || 0).toFixed(2)}
                 </p>
               </div>
 
@@ -365,7 +365,7 @@ export default function BacktestPage() {
                   Max Drawdown
                 </p>
                 <p className="text-xl font-bold text-loss">
-                  {results.max_drawdown.toFixed(1)}%
+                  {(Number(results.max_drawdown) || 0).toFixed(1)}%
                 </p>
               </div>
 
@@ -556,10 +556,10 @@ export default function BacktestPage() {
                               </span>
                             </td>
                             <td className="px-3 py-2.5 font-mono">
-                              {trade.entry_price.toFixed(5)}
+                              {(Number(trade.entry_price) || 0).toFixed(5)}
                             </td>
                             <td className="px-3 py-2.5 font-mono">
-                              {trade.exit_price.toFixed(5)}
+                              {(Number(trade.exit_price) || 0).toFixed(5)}
                             </td>
                             <td
                               className={`px-3 py-2.5 font-mono font-semibold ${
@@ -571,10 +571,10 @@ export default function BacktestPage() {
                               }`}
                             >
                               {trade.pnl >= 0 ? '+' : ''}
-                              {trade.pnl.toFixed(2)}
+                              {(Number(trade.pnl) || 0).toFixed(2)}
                             </td>
                             <td className="px-3 py-2.5 font-mono">
-                              {trade.rr_ratio.toFixed(2)}
+                              {(Number(trade.rr_ratio) || 0).toFixed(2)}
                             </td>
                           </tr>
                           {isExpanded && (

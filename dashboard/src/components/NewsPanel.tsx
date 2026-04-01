@@ -101,16 +101,16 @@ export default function NewsPanel({ news }: NewsPanelProps) {
               {/* Right: sentiment score */}
               <div
                 className={`shrink-0 flex items-center justify-center w-12 h-8 rounded ${sentimentBg(
-                  item.sentiment
+                  item.sentiment ?? 0
                 )}`}
               >
                 <span
                   className={`text-xs font-mono font-bold ${sentimentColor(
-                    item.sentiment
+                    item.sentiment ?? 0
                   )}`}
                 >
-                  {item.sentiment > 0 ? '+' : ''}
-                  {item.sentiment.toFixed(2)}
+                  {(item.sentiment ?? 0) > 0 ? '+' : ''}
+                  {(Number(item.sentiment) || 0).toFixed(2)}
                 </span>
               </div>
             </div>
