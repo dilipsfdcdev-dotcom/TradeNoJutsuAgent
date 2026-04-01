@@ -391,25 +391,32 @@ def _handle_trailing_stop(
     risk: float,
     atr: float,
 ) -> None:
-    """Apply the 3-tier trailing-stop logic for a single position."""
+    """Apply trailing-stop and dynamic TP logic for a single position.
+
+    Tiers (lowered for scalping):
+        profit > 1.0x risk  -> move SL to breakeven + 1 pip
+        profit > 1.5x risk  -> trail SL at 1x ATR behind price
+        profit > 2.5x risk  -> trail SL at 0.5x ATR (tight trail)
+    """
 
     ratio = profit / risk if risk else 0.0
 
-    # Tier 3: profit > 3x risk -> close 50 %, trail tighter (0.5x ATR)
-    if ratio > 3.0:
+    # Tier 3: profit > 2.5x risk -> tight trail at 0.5x ATR
+    if ratio > 2.5:
         log.info(
             "trailing_tier3",
             ticket=ticket,
             symbol=symbol,
             ratio=round(ratio, 2),
         )
-        partial_close(ticket, percent=50.0)
         if atr > 0:
             trail_stop(ticket, price, direction, atr, multiplier=0.5)
+        # Also extend TP if price is already near original TP
+        _extend_tp_if_trending(ticket, symbol, direction, price, atr)
         return
 
-    # Tier 2: profit > 2x risk -> trail at 1x ATR
-    if ratio > 2.0:
+    # Tier 2: profit > 1.5x risk -> trail at 1x ATR
+    if ratio > 1.5:
         log.info(
             "trailing_tier2",
             ticket=ticket,
@@ -420,16 +427,58 @@ def _handle_trailing_stop(
             trail_stop(ticket, price, direction, atr, multiplier=1.0)
         return
 
-    # Tier 1: profit > 1.5x risk -> breakeven + 1 pip
-    if ratio > 1.5:
+    # Tier 1: profit > 1.0x risk -> breakeven + 1 pip
+    if ratio > 1.0:
         log.info(
-            "trailing_tier1",
+            "trailing_tier1_breakeven",
             ticket=ticket,
             symbol=symbol,
             ratio=round(ratio, 2),
         )
         _move_to_breakeven(ticket, entry_price, direction, symbol)
         return
+
+
+def _extend_tp_if_trending(
+    ticket: int,
+    symbol: str,
+    direction: str,
+    price: float,
+    atr: float,
+) -> None:
+    """If price is within 1 ATR of the current TP, extend TP by 2x ATR."""
+    if atr <= 0:
+        return
+
+    try:
+        import MetaTrader5 as _mt5
+        positions = _mt5.positions_get(ticket=ticket)
+        if not positions:
+            return
+        pos = positions[0]
+        current_tp = pos.tp
+
+        if current_tp <= 0:
+            return
+
+        if direction == "buy":
+            distance_to_tp = current_tp - price
+            if distance_to_tp < atr:
+                new_tp = round(price + 2.0 * atr, 5)
+                if new_tp > current_tp:
+                    modify_order(ticket, new_tp=new_tp)
+                    log.info("tp_extended", ticket=ticket, old_tp=current_tp,
+                             new_tp=new_tp, symbol=symbol)
+        else:
+            distance_to_tp = price - current_tp
+            if distance_to_tp < atr:
+                new_tp = round(price - 2.0 * atr, 5)
+                if new_tp < current_tp:
+                    modify_order(ticket, new_tp=new_tp)
+                    log.info("tp_extended", ticket=ticket, old_tp=current_tp,
+                             new_tp=new_tp, symbol=symbol)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
