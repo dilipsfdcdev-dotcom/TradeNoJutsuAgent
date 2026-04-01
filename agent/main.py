@@ -1195,8 +1195,9 @@ async def main() -> None:
 
     # -- 2. Signal handlers ------------------------------------------------
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _signal_handler, sig)
+    if sys.platform != "win32":
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, _signal_handler, sig)
 
     # -- 3. Connections ----------------------------------------------------
     try:
