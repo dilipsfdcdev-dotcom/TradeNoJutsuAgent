@@ -67,7 +67,10 @@ from agent.db.session import async_session, engine
 
 # v2: ML modules and MTF analyzer
 from agent.ml.xgboost_filter import XGBoostFilter
-from agent.ml.lstm_model import LSTMConfidence
+try:
+    from agent.ml.lstm_model import LSTMConfidence
+except ImportError:
+    LSTMConfidence = None  # torch not installed — LSTM gate disabled
 from agent.signals.mtf_analyzer import MTFAnalyzer, compute_features
 
 # v3: Two-loop architecture — ML decides, Claude vetoes asynchronously
