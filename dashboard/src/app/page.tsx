@@ -116,13 +116,15 @@ export default function Home() {
 
       if (equityRes.status === 'fulfilled' && equityRes.value.ok) {
         const data = await equityRes.value.json();
-        setEquityData(
-          data.map((p: { timestamp: string; equity: number; balance?: number }) => ({
-            time: p.timestamp,
-            balance: p.balance ?? p.equity,
-            equity: p.equity,
-          }))
-        );
+        if (Array.isArray(data) && data.length > 0) {
+          setEquityData(
+            data.map((p: any) => ({
+              time: p.date || p.timestamp || '',
+              balance: p.ending_balance ?? p.balance ?? p.equity ?? 0,
+              equity: p.ending_balance ?? p.equity ?? 0,
+            }))
+          );
+        }
       }
 
       if (newsRes.status === 'fulfilled' && newsRes.value.ok) {

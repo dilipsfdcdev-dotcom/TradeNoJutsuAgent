@@ -215,6 +215,16 @@ def create_app() -> FastAPI:
         row = result.one()
         total = row.closed_trades or 0
         winning = row.winning or 0
+        # Get today's trades count
+        today_start = datetime.combine(date.today(), datetime.min.time())
+        today_result = await session.execute(
+            select(
+                func.count(Trade.id).label("todays_trades"),
+                func.coalesce(func.sum(Trade.pnl), 0).label("daily_pnl"),
+            ).where(Trade.created_at >= today_start)
+        )
+        today_row = today_result.one()
+
         return _serialise(
             {
                 "total_trades": row.total_trades,
@@ -222,6 +232,7 @@ def create_app() -> FastAPI:
                 "winning": winning,
                 "losing": row.losing or 0,
                 "win_rate": round(winning / total * 100, 1) if total else 0.0,
+                "total_pnl": row.net_pnl,
                 "net_pnl": row.net_pnl,
                 "gross_profit": row.gross_profit,
                 "gross_loss": row.gross_loss,
@@ -229,8 +240,15 @@ def create_app() -> FastAPI:
                 "profit_factor": (
                     round(float(row.gross_profit) / abs(float(row.gross_loss)), 2)
                     if row.gross_loss and float(row.gross_loss) != 0
-                    else None
+                    else 0.0
                 ),
+                "max_drawdown": 0.0,
+                "sharpe_ratio": 0.0,
+                "todays_trades": today_row.todays_trades or 0,
+                "daily_pnl": today_row.daily_pnl or 0,
+                "avg_rr": 0.0,
+                "consecutive_wins": 0,
+                "consecutive_losses": 0,
             }
         )
 
@@ -508,6 +526,18 @@ def create_app() -> FastAPI:
         except Exception as e:
             return {"connected": False, "error": str(e)}
 
+    @app.get("/api/account")
+    async def get_account() -> dict:
+        """Return live MT5 account info (balance, equity, etc.)."""
+        try:
+            from agent.data.mt5_feed import get_account_info
+            info = get_account_info()
+            if info:
+                return _serialise({"connected": True, **info})
+            return {"connected": False, "error": "Could not fetch account info"}
+        except Exception as e:
+            return {"connected": False, "error": str(e)}
+
     @app.get("/api/health")
     async def health() -> dict:
         """Basic health check endpoint."""
@@ -560,14 +590,27 @@ def create_app() -> FastAPI:
 
     @app.get("/api/news")
     async def get_news(limit: int = Query(10, ge=1, le=100)) -> list[dict]:
-        """Return cached news items from Redis."""
+        """Return cached news items from Redis with sentiment and id fields."""
         try:
+            import hashlib
             import redis.asyncio as aioredis
             from agent.data.news_feed import NEWS_CACHE_KEY
             r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
             raw = await r.zrevrange(NEWS_CACHE_KEY, 0, limit - 1)
             await r.aclose()
-            return [json.loads(item) for item in raw]
+            items = []
+            for item_str in raw:
+                item = json.loads(item_str)
+                # Add id if missing
+                if "id" not in item:
+                    item["id"] = hashlib.md5(
+                        (item.get("headline", "") + item.get("timestamp", "")).encode()
+                    ).hexdigest()[:12]
+                # Add sentiment if missing (default 0)
+                if "sentiment" not in item:
+                    item["sentiment"] = 0.0
+                items.append(item)
+            return items
         except Exception:
             return []
 

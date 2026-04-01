@@ -182,7 +182,7 @@ def _init_mt5_or_die() -> None:
 # =========================================================================
 
 async def _price_feed_tick() -> None:
-    """Fetch latest ticks for every symbol and publish to Redis."""
+    """Fetch latest ticks for every symbol and publish to Redis + WebSocket."""
     global _redis
     if _redis is None:
         return
@@ -195,6 +195,12 @@ async def _price_feed_tick() -> None:
                 key = f"tick:{symbol}"
                 await _redis.set(key, json.dumps(tick), ex=30)
                 await _redis.publish(f"tick_update:{symbol}", json.dumps(tick))
+                # Push to WebSocket for dashboard
+                try:
+                    from agent.monitoring.websocket_server import push
+                    await push("prices", {"symbol": symbol, **tick})
+                except Exception:
+                    pass
         except Exception:
             log.exception("price_feed.tick_error", symbol=symbol)
 
@@ -501,6 +507,17 @@ async def _analyse_symbol(symbol: str) -> None:
 
     if not can_trade:
         log.info("analysis.trading_blocked", symbol=symbol, reason=reason)
+        try:
+            from agent.monitoring.websocket_server import push
+            await push("signals", {
+                "symbol": symbol,
+                "action": "blocked",
+                "confidence": 0,
+                "reasoning": reason or "Trading blocked",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception:
+            pass
         return
 
     # =====================================================================
@@ -530,7 +547,24 @@ async def _analyse_symbol(symbol: str) -> None:
         reasoning=decision.reasoning[:120] if decision.reasoning else "",
     )
 
-    # Push full state to WebSocket
+    # Push signal to WebSocket for dashboard
+    try:
+        from agent.monitoring.websocket_server import push
+        await push("signals", {
+            "symbol": symbol,
+            "action": decision.action,
+            "confidence": decision.confidence,
+            "reasoning": decision.reasoning or "",
+            "risk_score": getattr(decision, "risk_score", 0),
+            "entry": getattr(decision, "entry", 0),
+            "sl": getattr(decision, "sl", 0),
+            "tp": getattr(decision, "tp", 0),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        pass
+
+    # Push full state to Redis
     await _publish_v2_state(
         symbol, mtf_state=mtf_state, xgb_result=xgb_result,
         lstm_result=lstm_result, decision=decision,
