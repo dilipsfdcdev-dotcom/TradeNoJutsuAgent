@@ -154,7 +154,7 @@ export default function Home() {
 
   useEffect(() => {
     fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 30000);
+    const interval = setInterval(fetchDashboardData, 5000);
     return () => clearInterval(interval);
   }, [fetchDashboardData]);
 
