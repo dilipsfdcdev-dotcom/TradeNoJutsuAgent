@@ -11,7 +11,7 @@ import MTFStatusPanel from '@/components/MTFStatusPanel';
 import MLScoresPanel from '@/components/MLScoresPanel';
 import { useWebSocket } from '@/hooks/useWebSocket';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8765';
 
 interface AgentStatus {
   status: 'running' | 'paused' | 'stopped';

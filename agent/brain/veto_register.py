@@ -5,7 +5,7 @@ Backed by Redis for persistence, falls back to in-memory dict.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import json
 import structlog
@@ -40,7 +40,7 @@ class VetoState:
             risk_modifier=data.get("risk_modifier", 1.0),
             expires_at=datetime.fromisoformat(exp) if exp else None,
             source=data.get("source", ""),
-            set_at=datetime.fromisoformat(sat) if sat else datetime.utcnow(),
+            set_at=datetime.fromisoformat(sat) if sat else datetime.now(timezone.utc),
         )
 
 
@@ -55,7 +55,7 @@ class VetoRegister:
 
     def check(self, symbol: str) -> VetoState:
         """Called by fast loop. Returns combined veto state. <0.1ms."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         global_veto = self._get(symbol="GLOBAL")
         symbol_veto = self._get(symbol=symbol)
 
@@ -121,7 +121,7 @@ class VetoRegister:
                 payload = json.dumps(state.to_dict())
                 # TTL: if expires_at is set use it, otherwise 24h default
                 if state.expires_at:
-                    ttl_secs = max(int((state.expires_at - datetime.utcnow()).total_seconds()), 60)
+                    ttl_secs = max(int((state.expires_at - datetime.now(timezone.utc)).total_seconds()), 60)
                 else:
                     ttl_secs = 86400
                 self._redis.setex(f"{self._REDIS_PREFIX}{symbol}", ttl_secs, payload)
