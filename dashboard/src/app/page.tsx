@@ -11,7 +11,7 @@ import MTFStatusPanel from '@/components/MTFStatusPanel';
 import MLScoresPanel from '@/components/MLScoresPanel';
 import { useWebSocket } from '@/hooks/useWebSocket';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8765';
 
 interface AgentStatus {
   status: 'running' | 'paused' | 'stopped';
@@ -56,6 +56,8 @@ interface MLScores {
 export default function Home() {
   const [agentStatus, setAgentStatus] = useState<'running' | 'paused' | 'stopped'>('stopped');
   const [dailyPnl, setDailyPnl] = useState<number>(0);
+  const [accountBalance, setAccountBalance] = useState<number>(0);
+  const [accountEquity, setAccountEquity] = useState<number>(0);
   const [activeTrades, setActiveTrades] = useState<ActiveTrade[]>([]);
   const [equityData, setEquityData] = useState<{ time: string; balance: number; equity: number }[]>([]);
   const [metrics, setMetrics] = useState<MetricsData>({
@@ -71,26 +73,31 @@ export default function Home() {
   });
   const [news, setNews] = useState<NewsItem[]>([]);
 
-  const { data: positionsData } = useWebSocket<PositionsMessage>('positions');
+  const { data: positionsData } = useWebSocket<PositionsMessage>('trades');
   const { data: mtfData } = useWebSocket<MTFData>('mtf_state');
   const { data: mlData } = useWebSocket<MLScores>('ml_scores');
 
-  // Update active trades from WebSocket
+  // Update active trades from WebSocket (avoid unnecessary re-renders)
   useEffect(() => {
-    if (positionsData?.positions) {
-      setActiveTrades(positionsData.positions);
-    }
+    if (!positionsData?.positions) return;
+    setActiveTrades((prev) => {
+      const next = positionsData.positions;
+      // Only update if the data actually changed
+      if (JSON.stringify(prev) === JSON.stringify(next)) return prev;
+      return next;
+    });
   }, [positionsData]);
 
   // Fetch initial data from REST API
   const fetchDashboardData = useCallback(async () => {
     try {
-      const [statusRes, metricsRes, equityRes, newsRes, tradesRes] = await Promise.allSettled([
+      const [statusRes, metricsRes, equityRes, newsRes, tradesRes, accountRes] = await Promise.allSettled([
         fetch(`${API_BASE}/api/agent/status`),
         fetch(`${API_BASE}/api/metrics`),
         fetch(`${API_BASE}/api/equity?days=30`),
         fetch(`${API_BASE}/api/news?limit=10`),
         fetch(`${API_BASE}/api/trades?status=open`),
+        fetch(`${API_BASE}/api/account`),
       ]);
 
       if (statusRes.status === 'fulfilled' && statusRes.value.ok) {
@@ -116,13 +123,15 @@ export default function Home() {
 
       if (equityRes.status === 'fulfilled' && equityRes.value.ok) {
         const data = await equityRes.value.json();
-        setEquityData(
-          data.map((p: { timestamp: string; equity: number; balance?: number }) => ({
-            time: p.timestamp,
-            balance: p.balance ?? p.equity,
-            equity: p.equity,
-          }))
-        );
+        if (Array.isArray(data) && data.length > 0) {
+          setEquityData(
+            data.map((p: any) => ({
+              time: p.date || p.timestamp || '',
+              balance: p.ending_balance ?? p.balance ?? p.equity ?? 0,
+              equity: p.ending_balance ?? p.equity ?? 0,
+            }))
+          );
+        }
       }
 
       if (newsRes.status === 'fulfilled' && newsRes.value.ok) {
@@ -134,6 +143,14 @@ export default function Home() {
         const data = await tradesRes.value.json();
         setActiveTrades(data);
       }
+
+      if (accountRes.status === 'fulfilled' && accountRes.value.ok) {
+        const data = await accountRes.value.json();
+        if (data.connected) {
+          setAccountBalance(data.balance ?? 0);
+          setAccountEquity(data.equity ?? 0);
+        }
+      }
     } catch {
       // Silently handle fetch errors -- individual panels show empty states
     }
@@ -141,7 +158,7 @@ export default function Home() {
 
   useEffect(() => {
     fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 30000);
+    const interval = setInterval(fetchDashboardData, 5000);
     return () => clearInterval(interval);
   }, [fetchDashboardData]);
 
@@ -161,9 +178,9 @@ export default function Home() {
 
   // Build trade markers for chart
   const tradeMarkers = activeTrades.map((t: ActiveTrade) => ({
-    entry: t.entry_price,
-    sl: t.sl,
-    tp: t.tp,
+    entry: Number(t.entry_price) || 0,
+    sl: Number(t.sl) || 0,
+    tp: Number(t.tp) || 0,
     side: t.side,
   }));
 
@@ -200,6 +217,18 @@ export default function Home() {
           </span>
         </div>
         <div className="flex items-center gap-4">
+          <div className="text-right">
+            <div className="text-[10px] uppercase text-muted-foreground">Balance</div>
+            <div className="text-sm font-mono font-bold text-foreground">
+              ${(Number(accountBalance) || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] uppercase text-muted-foreground">Equity</div>
+            <div className="text-sm font-mono font-bold text-foreground">
+              ${(Number(accountEquity) || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            </div>
+          </div>
           <div className="text-right">
             <div className="text-[10px] uppercase text-muted-foreground">Today&apos;s P&amp;L</div>
             <div className={`text-sm font-mono font-bold ${pnlColor}`}>

@@ -109,10 +109,20 @@ export default function LiveChart({ symbol: initialSymbol, activeTrades = [] }: 
     if (!priceData || !seriesRef.current) return;
     if (priceData.symbol !== selectedSymbol) return;
 
+    // Coerce OHLC values to numbers (they may arrive as strings from JSON)
+    const toCandle = (c: any): CandlestickData => ({
+      time: Number(c.time) as CandlestickData['time'],
+      open: Number(c.open),
+      high: Number(c.high),
+      low: Number(c.low),
+      close: Number(c.close),
+    });
+
     // Initial batch of candles
     if (priceData.candles && priceData.candles.length > 0) {
       priceData.candles.forEach((c) => {
-        candlesRef.current.set(c.time as number, c);
+        const candle = toCandle(c);
+        candlesRef.current.set(candle.time as number, candle);
       });
       const sorted = Array.from(candlesRef.current.values()).sort(
         (a, b) => (a.time as number) - (b.time as number)
@@ -123,9 +133,9 @@ export default function LiveChart({ symbol: initialSymbol, activeTrades = [] }: 
 
     // Single candle update (real-time tick)
     if (priceData.candle) {
-      const c = priceData.candle;
-      candlesRef.current.set(c.time as number, c);
-      seriesRef.current.update(c);
+      const candle = toCandle(priceData.candle);
+      candlesRef.current.set(candle.time as number, candle);
+      seriesRef.current.update(candle);
     }
   }, [priceData, selectedSymbol]);
 
@@ -141,8 +151,14 @@ export default function LiveChart({ symbol: initialSymbol, activeTrades = [] }: 
     const lines: ReturnType<typeof series.createPriceLine>[] = [];
 
     activeTrades.forEach((trade) => {
+      const entry = Number(trade.entry) || 0;
+      const sl = Number(trade.sl) || 0;
+      const tp = Number(trade.tp) || 0;
+
+      if (!entry) return; // skip trades with no valid entry price
+
       const entryLine = series.createPriceLine({
-        price: trade.entry,
+        price: entry,
         color: '#3b82f6',
         lineWidth: 2,
         lineStyle: LineStyle.Solid,
@@ -152,7 +168,7 @@ export default function LiveChart({ symbol: initialSymbol, activeTrades = [] }: 
       lines.push(entryLine);
 
       const slLine = series.createPriceLine({
-        price: trade.sl,
+        price: sl,
         color: '#ef4444',
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,
@@ -162,7 +178,7 @@ export default function LiveChart({ symbol: initialSymbol, activeTrades = [] }: 
       lines.push(slLine);
 
       const tpLine = series.createPriceLine({
-        price: trade.tp,
+        price: tp,
         color: '#22c55e',
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,

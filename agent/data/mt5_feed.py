@@ -3,16 +3,46 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
+import sys
 import time
 from datetime import datetime, timezone
 
-import MetaTrader5 as mt5
 import pandas as pd
 import structlog
 
 from agent.config import settings
 
 log = structlog.get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# MT5 import with platform-aware error handling
+# ---------------------------------------------------------------------------
+try:
+    import MetaTrader5 as mt5
+except ImportError:
+    _system = platform.system()
+    if _system != "Windows":
+        log.error(
+            "mt5.import_failed",
+            reason=(
+                "MetaTrader5 Python package is only available on Windows. "
+                f"Detected platform: {_system}. "
+                "To run on Linux, install Wine and the MT5 terminal first, "
+                "then install MetaTrader5 inside a Windows-compatible Python (e.g. via Wine)."
+            ),
+        )
+    else:
+        log.error(
+            "mt5.import_failed",
+            reason=(
+                "MetaTrader5 package not installed. "
+                "Install it with: pip install MetaTrader5  "
+                "or: pip install '.[mt5]'"
+            ),
+        )
+    mt5 = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # Timeframe mapping
@@ -42,18 +72,67 @@ def init_mt5() -> bool:
 
     Returns True on success, False on failure.
     """
-    kwargs: dict = {"path": settings.MT5_PATH}
-    if settings.MT5_LOGIN:
-        kwargs.update(
+    if mt5 is None:
+        log.critical(
+            "mt5.not_available",
+            hint="MetaTrader5 package could not be imported. See earlier error for details.",
+        )
+        return False
+
+    # --- Validate credentials before attempting connection ----
+    if not settings.MT5_LOGIN:
+        log.error(
+            "mt5.missing_credentials",
+            hint=(
+                "MT5_LOGIN is not set (or is 0). "
+                "Copy .env.example to .env and fill in your broker credentials: "
+                "MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH."
+            ),
+        )
+        return False
+
+    if not settings.MT5_PASSWORD or not settings.MT5_SERVER:
+        log.error(
+            "mt5.missing_credentials",
+            hint="MT5_PASSWORD and MT5_SERVER must both be set in your .env file.",
             login=settings.MT5_LOGIN,
-            password=settings.MT5_PASSWORD,
-            server=settings.MT5_SERVER,
+            server=settings.MT5_SERVER or "(empty)",
+        )
+        return False
+
+    # --- Check MT5 terminal path exists (Windows / Wine) -----
+    mt5_path = settings.MT5_PATH
+    if platform.system() != "Windows" and mt5_path.startswith("C:"):
+        log.warning(
+            "mt5.path_looks_like_windows",
+            path=mt5_path,
+            hint=(
+                "MT5_PATH appears to be a Windows path but you are on "
+                f"{platform.system()}. If using Wine, set MT5_PATH to the "
+                "Wine-mapped path (e.g. ~/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe)."
+            ),
         )
 
+    kwargs: dict = {
+        "path": mt5_path,
+        "login": settings.MT5_LOGIN,
+        "password": settings.MT5_PASSWORD,
+        "server": settings.MT5_SERVER,
+    }
+
     if not mt5.initialize(**kwargs):
+        err = mt5.last_error()
         log.error(
-            "mt5.initialize failed",
-            error_code=mt5.last_error(),
+            "mt5.initialize_failed",
+            error_code=err,
+            login=settings.MT5_LOGIN,
+            server=settings.MT5_SERVER,
+            path=mt5_path,
+            hint=(
+                "Common causes: (1) MT5 terminal is not running, "
+                "(2) wrong MT5_PATH, (3) invalid login/password/server, "
+                "(4) algo trading not enabled in MT5 terminal settings."
+            ),
         )
         return False
 
@@ -69,12 +148,15 @@ def init_mt5() -> bool:
 
 def shutdown_mt5() -> None:
     """Shut down the MT5 terminal connection."""
-    mt5.shutdown()
+    if mt5 is not None:
+        mt5.shutdown()
     log.info("MT5 shutdown complete")
 
 
 def _ensure_connected() -> bool:
     """Return True if connected, attempting a reconnect if not."""
+    if mt5 is None:
+        return False
     info = mt5.terminal_info()
     if info is not None and getattr(info, "connected", False):
         return True

@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     NEWS_CHECK_INTERVAL_SEC: int = 60
 
     # Architecture mode: "v2" (Claude decides) or "v3" (ML decides, Claude vetoes)
-    AGENT_MODE: str = "v3"
+    AGENT_MODE: str = "v2"
 
     # Dashboard
     DASHBOARD_PORT: int = 3000

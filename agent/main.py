@@ -182,7 +182,7 @@ def _init_mt5_or_die() -> None:
 # =========================================================================
 
 async def _price_feed_tick() -> None:
-    """Fetch latest ticks for every symbol and publish to Redis."""
+    """Fetch latest ticks for every symbol and publish to Redis + WebSocket."""
     global _redis
     if _redis is None:
         return
@@ -195,12 +195,18 @@ async def _price_feed_tick() -> None:
                 key = f"tick:{symbol}"
                 await _redis.set(key, json.dumps(tick), ex=30)
                 await _redis.publish(f"tick_update:{symbol}", json.dumps(tick))
+                # Push to WebSocket for dashboard
+                try:
+                    from agent.monitoring.websocket_server import push
+                    await push("prices", {"symbol": symbol, **tick})
+                except Exception:
+                    pass
         except Exception:
             log.exception("price_feed.tick_error", symbol=symbol)
 
 
 async def _price_feed_candles() -> None:
-    """Fetch candles for every symbol/TF combo and cache in Redis."""
+    """Fetch candles for every symbol/TF combo and cache in Redis + push to WebSocket."""
     global _redis
     if _redis is None:
         return
@@ -219,6 +225,34 @@ async def _price_feed_candles() -> None:
                 key = f"candles:{symbol}:{tf}"
                 await _redis.set(key, payload)
                 await _redis.publish(f"candles_update:{symbol}:{tf}", payload)
+
+                # Push M1 candles to WebSocket for dashboard chart
+                if tf == "M1":
+                    try:
+                        from agent.monitoring.websocket_server import push
+                        candle_list = json.loads(payload)
+                        # Convert to lightweight-charts format
+                        chart_candles = []
+                        for c in candle_list[-100:]:
+                            try:
+                                from datetime import datetime as _dt
+                                ts = int(_dt.fromisoformat(str(c["time"]).replace(" ", "T")).timestamp())
+                                chart_candles.append({
+                                    "time": ts,
+                                    "open": float(c["open"]),
+                                    "high": float(c["high"]),
+                                    "low": float(c["low"]),
+                                    "close": float(c["close"]),
+                                })
+                            except (ValueError, KeyError):
+                                continue
+                        if chart_candles:
+                            await push("prices", {
+                                "symbol": symbol,
+                                "candles": chart_candles,
+                            })
+                    except Exception:
+                        pass
             except Exception:
                 log.exception("price_feed.candle_error", symbol=symbol, tf=tf)
 
@@ -248,8 +282,10 @@ async def _calendar_refresh() -> None:
 
 
 async def _position_manager_tick() -> None:
-    """Run position management (trailing stops, partial closes, time exits)."""
+    """Run position management and push positions to dashboard."""
     try:
+        from agent.execution.mt5_executor import get_open_positions
+
         # Compute current ATR values for each symbol with open positions
         atr_values: dict[str, float] = {}
         for symbol in settings.symbols_list:
@@ -262,6 +298,32 @@ async def _position_manager_tick() -> None:
                 atr_values[symbol] = float(last_atr)
 
         manage_positions(atr_values)
+
+        # Push open positions to dashboard WebSocket
+        try:
+            from agent.monitoring.websocket_server import push
+            positions = get_open_positions()
+            dashboard_positions = []
+            for pos in positions:
+                tick = get_tick(pos["symbol"])
+                current_price = 0.0
+                if tick:
+                    current_price = tick["ask"] if pos["direction"] == "buy" else tick["bid"]
+                dashboard_positions.append({
+                    "id": str(pos["ticket"]),
+                    "symbol": pos["symbol"],
+                    "side": pos["direction"],
+                    "lots": pos["volume"],
+                    "entry_price": pos["price_open"],
+                    "current_price": current_price,
+                    "sl": pos["sl"],
+                    "tp": pos["tp"],
+                    "pnl": pos["profit"],
+                    "opened_at": pos["time"].isoformat() if hasattr(pos["time"], "isoformat") else str(pos["time"]),
+                })
+            await push("trades", {"positions": dashboard_positions})
+        except Exception:
+            pass
     except Exception:
         log.exception("position_manager.error")
 
@@ -413,16 +475,14 @@ async def _analyse_symbol(symbol: str) -> None:
         except Exception:
             log.exception("analysis.mtf_update_error", symbol=symbol)
 
-    # v2 Step 2: If MTF gates didn't pass, skip ML brains
+    # v2 Step 2: Log MTF gate status but continue to Claude analysis
     if mtf_state is not None and not mtf_state.gates_passed:
-        log.info("analysis.mtf_gates_blocked", symbol=symbol,
-                 gate_details=getattr(mtf_state, "gate_details", ""))
-        # Push mtf_state to WebSocket even when blocked
-        await _publish_v2_state(symbol, mtf_state=mtf_state)
-        return
+        log.debug("analysis.mtf_gates_info", symbol=symbol,
+                  gate_details=getattr(mtf_state, "gate_details", ""))
+        # Don't return — let Claude decide based on full context
 
     # =====================================================================
-    # v2 Step 3: Brain 1 -- XGBoost filter
+    # v2 Step 3: Brain 1 -- XGBoost filter (informational, does not block)
     # =====================================================================
     if mtf_state is not None and symbol in _xgb_filters:
         try:
@@ -433,16 +493,11 @@ async def _analyse_symbol(symbol: str) -> None:
             xgb_result = _xgb_filters[symbol].predict(features["xgb_features"])
             log.info("analysis.xgb_result", symbol=symbol,
                      score=xgb_result["score"], passed=xgb_result["pass"])
-            if not xgb_result["pass"]:
-                await _publish_v2_state(symbol, mtf_state=mtf_state,
-                                        xgb_result=xgb_result)
-                return
         except Exception:
             log.exception("analysis.xgb_error", symbol=symbol)
-            # On error, continue without XGBoost (graceful degradation)
 
     # =====================================================================
-    # v2 Step 4: Brain 2 -- LSTM confidence
+    # v2 Step 4: Brain 2 -- LSTM confidence (informational, does not block)
     # =====================================================================
     if mtf_state is not None and symbol in _lstm_models:
         try:
@@ -453,14 +508,8 @@ async def _analyse_symbol(symbol: str) -> None:
                          confidence=lstm_result["confidence"],
                          regime=lstm_result["regime"],
                          passed=lstm_result["pass"])
-                if not lstm_result["pass"]:
-                    await _publish_v2_state(symbol, mtf_state=mtf_state,
-                                            xgb_result=xgb_result,
-                                            lstm_result=lstm_result)
-                    return
         except Exception:
             log.exception("analysis.lstm_error", symbol=symbol)
-            # On error, continue without LSTM (graceful degradation)
 
     # =====================================================================
     # v2 Step 5: Circuit breaker
@@ -501,6 +550,20 @@ async def _analyse_symbol(symbol: str) -> None:
 
     if not can_trade:
         log.info("analysis.trading_blocked", symbol=symbol, reason=reason)
+        try:
+            from agent.monitoring.websocket_server import push
+            import hashlib as _hs
+            ts = datetime.now(timezone.utc).isoformat()
+            await push("signals", {"signal": {
+                "id": _hs.md5(f"{symbol}{ts}".encode()).hexdigest()[:10],
+                "symbol": symbol,
+                "action": "WAIT",
+                "confidence": 0,
+                "reasoning": reason or "Trading blocked",
+                "timestamp": ts,
+            }})
+        except Exception:
+            pass
         return
 
     # =====================================================================
@@ -530,7 +593,23 @@ async def _analyse_symbol(symbol: str) -> None:
         reasoning=decision.reasoning[:120] if decision.reasoning else "",
     )
 
-    # Push full state to WebSocket
+    # Push signal to WebSocket for dashboard
+    try:
+        from agent.monitoring.websocket_server import push
+        import hashlib as _hs
+        ts = datetime.now(timezone.utc).isoformat()
+        await push("signals", {"signal": {
+            "id": _hs.md5(f"{symbol}{ts}".encode()).hexdigest()[:10],
+            "symbol": symbol,
+            "action": decision.action.upper(),
+            "confidence": decision.confidence / 100 if decision.confidence > 1 else decision.confidence,
+            "reasoning": decision.reasoning or "",
+            "timestamp": ts,
+        }})
+    except Exception:
+        pass
+
+    # Push full state to Redis
     await _publish_v2_state(
         symbol, mtf_state=mtf_state, xgb_result=xgb_result,
         lstm_result=lstm_result, decision=decision,
@@ -539,7 +618,7 @@ async def _analyse_symbol(symbol: str) -> None:
     # =====================================================================
     # v2 Step 7: Trade execution
     # =====================================================================
-    if decision.action == "wait" or decision.confidence < 70:
+    if decision.action == "wait" or decision.confidence < 40:
         return
 
     max_daily_loss = balance * (settings.MAX_DAILY_LOSS_PCT / 100.0)
@@ -602,14 +681,6 @@ async def _analyse_symbol(symbol: str) -> None:
             "sentiment_score": sentiment.score if sentiment else None,
             "patterns_detected": [p.type for p in patterns[:5]],
             "ai_reasoning": decision.reasoning,
-            # v2: ML metadata for post-trade review and label generation
-            "xgb_score": xgb_result["score"] if xgb_result else None,
-            "lstm_confidence": lstm_result["confidence"] if lstm_result else None,
-            "lstm_direction": lstm_result["direction"] if lstm_result else None,
-            "lstm_regime": lstm_result["regime"] if lstm_result else None,
-            "mtf_confluence": getattr(mtf_state, "confluence_score", None) if mtf_state else None,
-            "lot_size_suggestion": decision.lot_size_suggestion,
-            "risk_warnings": decision.risk_warnings,
         }
 
         async with async_session() as db:
@@ -1095,12 +1166,13 @@ def _init_v2_models() -> None:
             model_path=str(xgb_path) if xgb_path.exists() else None,
         )
 
-        # LSTM
-        lstm_path = models_dir / f"lstm_{symbol}.pt"
-        _lstm_models[symbol] = LSTMConfidence(
-            symbol=symbol,
-            model_path=str(lstm_path) if lstm_path.exists() else None,
-        )
+        # LSTM (optional — torch may not be installed)
+        if LSTMConfidence is not None:
+            lstm_path = models_dir / f"lstm_{symbol}.pt"
+            _lstm_models[symbol] = LSTMConfidence(
+                symbol=symbol,
+                model_path=str(lstm_path) if lstm_path.exists() else None,
+            )
 
     _mtf_analyzer = MTFAnalyzer()
 
@@ -1255,17 +1327,17 @@ async def main() -> None:
     _scheduler.add_job(
         _price_feed_tick,
         "interval",
-        seconds=1,
+        seconds=2,
         id="price_feed_tick",
-        max_instances=1,
+        max_instances=2,
         misfire_grace_time=5,
     )
     _scheduler.add_job(
         _price_feed_candles,
         "interval",
-        seconds=5,
+        seconds=10,
         id="price_feed_candles",
-        max_instances=1,
+        max_instances=2,
         misfire_grace_time=10,
     )
 

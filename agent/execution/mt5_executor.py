@@ -6,10 +6,14 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-import MetaTrader5 as mt5
 import structlog
 
 from agent.data.mt5_feed import _ensure_connected
+
+try:
+    import MetaTrader5 as mt5
+except ImportError:
+    mt5 = None  # type: ignore[assignment]
 
 logger = structlog.get_logger(__name__)
 

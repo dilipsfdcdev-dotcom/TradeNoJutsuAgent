@@ -59,7 +59,19 @@ function MetricCard({ label, children }: MetricCardProps) {
   );
 }
 
-export default function MetricsPanel({ metrics }: MetricsPanelProps) {
+export default function MetricsPanel({ metrics: raw }: MetricsPanelProps) {
+  // Ensure every field is a finite number so .toFixed / arithmetic never throws.
+  const metrics: MetricsData = {
+    winRate: Number(raw.winRate) || 0,
+    profitFactor: Number(raw.profitFactor) || 0,
+    totalPnl: Number(raw.totalPnl) || 0,
+    maxDrawdown: Number(raw.maxDrawdown) || 0,
+    sharpeRatio: Number(raw.sharpeRatio) || 0,
+    todaysTrades: Number(raw.todaysTrades) || 0,
+    avgRR: Number(raw.avgRR) || 0,
+    consecutiveWins: Number(raw.consecutiveWins) || 0,
+    consecutiveLosses: Number(raw.consecutiveLosses) || 0,
+  };
   const pnlColor = metrics.totalPnl >= 0 ? 'text-profit' : 'text-loss';
 
   return (

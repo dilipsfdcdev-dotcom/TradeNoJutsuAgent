@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8765';
+const WS_BASE = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8765';
 
 interface ServiceStatus {
   api: boolean;
@@ -47,7 +47,7 @@ export default function ConnectionStatus() {
   const checkWebSocket = useCallback((): Promise<boolean> => {
     return new Promise((resolve) => {
       try {
-        const ws = new WebSocket(`${WS_BASE}/ws/ping`);
+        const ws = new WebSocket(`${WS_BASE}/ws/prices`);
         const timeout = setTimeout(() => {
           ws.close();
           resolve(false);
@@ -71,7 +71,7 @@ export default function ConnectionStatus() {
 
   const checkMT5 = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/mt5/status`, {
+      const res = await fetch(`${API_BASE}/api/account`, {
         method: 'GET',
         signal: AbortSignal.timeout(5000),
       });

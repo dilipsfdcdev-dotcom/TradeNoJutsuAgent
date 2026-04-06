@@ -151,7 +151,7 @@ export default function MTFStatusPanel({ data, symbol }: MTFStatusPanelProps) {
             <span className="text-muted-foreground ml-auto">EMA:</span>
             <span className="font-mono text-foreground">{mtf.h1_ema_stack}</span>
             <span className="text-muted-foreground">Str:</span>
-            <span className="font-mono text-foreground">{mtf.h1_trend_strength.toFixed(0)}%</span>
+            <span className="font-mono text-foreground">{(Number(mtf.h1_trend_strength) || 0).toFixed(0)}%</span>
           </div>
 
           {/* Confluence score bar */}
@@ -176,7 +176,7 @@ export default function MTFStatusPanel({ data, symbol }: MTFStatusPanelProps) {
             {mtf.m1_entry_signal && (
               <span className="text-muted-foreground">
                 Entry: <span className={`font-mono font-bold ${m1Color}`}>
-                  {mtf.m1_entry_signal.entry_price.toFixed(2)}
+                  {(Number(mtf.m1_entry_signal.entry_price) || 0).toFixed(2)}
                 </span>
               </span>
             )}

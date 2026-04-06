@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -214,6 +215,16 @@ def create_app() -> FastAPI:
         row = result.one()
         total = row.closed_trades or 0
         winning = row.winning or 0
+        # Get today's trades count
+        today_start = datetime.combine(date.today(), datetime.min.time())
+        today_result = await session.execute(
+            select(
+                func.count(Trade.id).label("todays_trades"),
+                func.coalesce(func.sum(Trade.pnl), 0).label("daily_pnl"),
+            ).where(Trade.created_at >= today_start)
+        )
+        today_row = today_result.one()
+
         return _serialise(
             {
                 "total_trades": row.total_trades,
@@ -221,6 +232,7 @@ def create_app() -> FastAPI:
                 "winning": winning,
                 "losing": row.losing or 0,
                 "win_rate": round(winning / total * 100, 1) if total else 0.0,
+                "total_pnl": row.net_pnl,
                 "net_pnl": row.net_pnl,
                 "gross_profit": row.gross_profit,
                 "gross_loss": row.gross_loss,
@@ -228,8 +240,15 @@ def create_app() -> FastAPI:
                 "profit_factor": (
                     round(float(row.gross_profit) / abs(float(row.gross_loss)), 2)
                     if row.gross_loss and float(row.gross_loss) != 0
-                    else None
+                    else 0.0
                 ),
+                "max_drawdown": 0.0,
+                "sharpe_ratio": 0.0,
+                "todays_trades": today_row.todays_trades or 0,
+                "daily_pnl": today_row.daily_pnl or 0,
+                "avg_rr": 0.0,
+                "consecutive_wins": 0,
+                "consecutive_losses": 0,
             }
         )
 
@@ -320,28 +339,82 @@ def create_app() -> FastAPI:
     async def get_all_settings(
         session: AsyncSession = Depends(get_session),
     ) -> dict:
-        """Return all current settings for the setup page."""
+        """Return all current settings for the setup page.
+
+        Returns a nested structure matching the dashboard SetupSettings type.
+        """
         result = await session.execute(select(Setting))
         rows = result.scalars().all()
         db_settings = {r.key: r.value for r in rows}
+
+        paused = db_settings.get("agent_paused", {}).get("paused", False)
+
+        # Check live connection health
+        connection_health: dict[str, bool] = {
+            "mt5": False,
+            "database": False,
+            "redis": False,
+        }
+        try:
+            from agent.data.mt5_feed import _ensure_connected
+            connection_health["mt5"] = _ensure_connected()
+        except Exception:
+            pass
+        try:
+            connection_health["database"] = True  # we're using the DB right now
+        except Exception:
+            pass
+        try:
+            import redis.asyncio as aioredis
+            r = aioredis.from_url(settings.REDIS_URL)
+            await r.ping()
+            await r.aclose()
+            connection_health["redis"] = True
+        except Exception:
+            pass
+
+        # Parse symbols and timeframes into the list format the dashboard expects
+        symbols_list = [
+            {"symbol": s.strip(), "enabled": True}
+            for s in settings.SYMBOLS.split(",") if s.strip()
+        ]
+        timeframes_list = [
+            {"timeframe": t.strip(), "enabled": True}
+            for t in settings.TIMEFRAMES.split(",") if t.strip()
+        ]
+
         return _serialise({
-            "MT5_LOGIN": settings.MT5_LOGIN,
-            "MT5_SERVER": settings.MT5_SERVER,
-            "MT5_PATH": settings.MT5_PATH,
-            "ANTHROPIC_API_KEY": settings.ANTHROPIC_API_KEY[:8] + "..." if settings.ANTHROPIC_API_KEY else "",
-            "CLAUDE_MODEL": settings.CLAUDE_MODEL,
-            "DATABASE_URL": settings.DATABASE_URL,
-            "REDIS_URL": settings.REDIS_URL,
-            "NEWS_API_KEY": settings.NEWS_API_KEY[:8] + "..." if settings.NEWS_API_KEY else "",
-            "MAX_RISK_PER_TRADE_PCT": settings.MAX_RISK_PER_TRADE_PCT,
-            "MAX_DAILY_LOSS_PCT": settings.MAX_DAILY_LOSS_PCT,
-            "MAX_OPEN_TRADES": settings.MAX_OPEN_TRADES,
-            "MAX_DRAWDOWN_PCT": settings.MAX_DRAWDOWN_PCT,
-            "MIN_RR_RATIO": settings.MIN_RR_RATIO,
-            "SPREAD_FILTER_MULTIPLIER": settings.SPREAD_FILTER_MULTIPLIER,
-            "SYMBOLS": settings.SYMBOLS,
-            "TIMEFRAMES": settings.TIMEFRAMES,
-            "agent_paused": db_settings.get("agent_paused", {}).get("paused", False),
+            "mt5": {
+                "login": settings.MT5_LOGIN,
+                "password": "",  # never send password to frontend
+                "server": settings.MT5_SERVER,
+                "terminal_path": settings.MT5_PATH,
+            },
+            "claude": {
+                "api_key": (settings.ANTHROPIC_API_KEY[:8] + "...")
+                           if settings.ANTHROPIC_API_KEY else "",
+                "model": settings.CLAUDE_MODEL,
+            },
+            "database": {
+                "postgres_url": settings.DATABASE_URL,
+                "redis_url": settings.REDIS_URL,
+            },
+            "news": {
+                "api_key": (settings.NEWS_API_KEY[:8] + "...")
+                           if settings.NEWS_API_KEY else "",
+            },
+            "risk": {
+                "max_risk_per_trade": settings.MAX_RISK_PER_TRADE_PCT,
+                "max_daily_loss": settings.MAX_DAILY_LOSS_PCT,
+                "max_open_trades": settings.MAX_OPEN_TRADES,
+                "max_drawdown": settings.MAX_DRAWDOWN_PCT,
+                "min_rr_ratio": settings.MIN_RR_RATIO,
+                "spread_filter_multiplier": settings.SPREAD_FILTER_MULTIPLIER,
+            },
+            "symbols": symbols_list,
+            "timeframes": timeframes_list,
+            "agent_status": "paused" if paused else "running",
+            "connection_health": connection_health,
         })
 
     @app.post("/api/test-mt5")
@@ -357,13 +430,33 @@ def create_app() -> FastAPI:
                 object.__setattr__(settings, "MT5_PASSWORD", payload["password"])
             if payload.get("server"):
                 object.__setattr__(settings, "MT5_SERVER", payload["server"])
-            if payload.get("path"):
-                object.__setattr__(settings, "MT5_PATH", payload["path"])
+            if payload.get("path") or payload.get("terminal_path"):
+                object.__setattr__(settings, "MT5_PATH", payload.get("path") or payload["terminal_path"])
 
             connected = init_mt5()
             if connected:
                 info = get_account_info()
-                return _serialise({"connected": True, "account": info})
+                try:
+                    import MetaTrader5 as _mt5
+                    tinfo = _mt5.terminal_info()
+                    broker = getattr(tinfo, "company", "") or settings.MT5_SERVER
+                    ainfo = _mt5.account_info()
+                    acct_type = getattr(ainfo, "margin_mode", "")
+                    # margin_mode: 0=Netting, 2=Hedging, 1=Exchange
+                    mode_map = {0: "Netting", 1: "Exchange", 2: "Hedge"}
+                    acct_type = mode_map.get(acct_type, str(acct_type))
+                except Exception:
+                    broker = settings.MT5_SERVER
+                    acct_type = "N/A"
+                return _serialise({
+                    "connected": True,
+                    "account_info": {
+                        "balance": info.get("balance", 0),
+                        "equity": info.get("equity", 0),
+                        "broker": broker,
+                        "account_type": acct_type,
+                    },
+                })
             return {"connected": False, "error": "Failed to connect to MT5"}
         except Exception as e:
             return {"connected": False, "error": str(e)}
@@ -386,17 +479,140 @@ def create_app() -> FastAPI:
 
     @app.post("/api/test-db")
     async def test_db(session: AsyncSession = Depends(get_session)) -> dict:
-        """Test database connectivity."""
+        """Test database and Redis connectivity."""
+        pg_ok = False
+        redis_ok = False
+        error_msg = None
+
+        # Test PostgreSQL
         try:
             await session.execute(select(func.count(Trade.id)))
-            return {"postgresql": True, "error": None}
+            pg_ok = True
         except Exception as e:
-            return {"postgresql": False, "error": str(e)}
+            error_msg = f"PostgreSQL: {e}"
+
+        # Test Redis
+        try:
+            import redis.asyncio as aioredis
+            r = aioredis.from_url(settings.REDIS_URL)
+            await r.ping()
+            await r.aclose()
+            redis_ok = True
+        except Exception as e:
+            redis_err = f"Redis: {e}"
+            error_msg = f"{error_msg}; {redis_err}" if error_msg else redis_err
+
+        return {
+            "postgres": pg_ok,
+            "redis": redis_ok,
+            "error": error_msg,
+        }
+
+    @app.post("/api/test-news")
+    async def test_news(payload: dict) -> dict:
+        """Test News API connectivity."""
+        try:
+            import httpx
+            api_key = payload.get("api_key", settings.NEWS_API_KEY)
+            if not api_key:
+                return {"connected": False, "error": "No NEWS_API_KEY set"}
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    "https://newsapi.org/v2/everything",
+                    params={"q": "gold", "pageSize": 1, "apiKey": api_key},
+                )
+                resp.raise_for_status()
+                return {"connected": True}
+        except Exception as e:
+            return {"connected": False, "error": str(e)}
+
+    @app.get("/api/account")
+    async def get_account() -> dict:
+        """Return live MT5 account info (balance, equity, etc.)."""
+        try:
+            from agent.data.mt5_feed import get_account_info
+            info = get_account_info()
+            if info:
+                return _serialise({"connected": True, **info})
+            return {"connected": False, "error": "Could not fetch account info"}
+        except Exception as e:
+            return {"connected": False, "error": str(e)}
 
     @app.get("/api/health")
     async def health() -> dict:
         """Basic health check endpoint."""
         return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+    @app.get("/api/agent/status")
+    async def agent_status(
+        session: AsyncSession = Depends(get_session),
+    ) -> dict:
+        """Return current agent status (running / paused / stopped)."""
+        try:
+            result = await session.execute(
+                select(Setting).where(Setting.key == "agent_paused")
+            )
+            row = result.scalar_one_or_none()
+            if row and row.value.get("paused", False):
+                return {"status": "paused"}
+            return {"status": "running"}
+        except Exception:
+            return {"status": "running"}
+
+    @app.get("/api/equity")
+    async def get_equity(
+        days: int = Query(30, ge=1, le=365),
+        session: AsyncSession = Depends(get_session),
+    ) -> list[dict]:
+        """Alias for equity-curve, matching the dashboard's expected path."""
+        since = date.today() - timedelta(days=days)
+        result = await session.execute(
+            select(DailySummary)
+            .where(DailySummary.date >= since)
+            .order_by(DailySummary.date)
+        )
+        rows = result.scalars().all()
+        return [
+            _serialise(
+                {
+                    "date": r.date,
+                    "starting_balance": r.starting_balance,
+                    "ending_balance": r.ending_balance,
+                    "net_pnl": r.net_pnl,
+                    "max_drawdown_pct": r.max_drawdown_pct,
+                    "total_trades": r.total_trades,
+                    "winning_trades": r.winning_trades,
+                    "losing_trades": r.losing_trades,
+                }
+            )
+            for r in rows
+        ]
+
+    @app.get("/api/news")
+    async def get_news(limit: int = Query(10, ge=1, le=100)) -> list[dict]:
+        """Return cached news items from Redis with sentiment and id fields."""
+        try:
+            import hashlib
+            import redis.asyncio as aioredis
+            from agent.data.news_feed import NEWS_CACHE_KEY
+            r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+            raw = await r.zrevrange(NEWS_CACHE_KEY, 0, limit - 1)
+            await r.aclose()
+            items = []
+            for item_str in raw:
+                item = json.loads(item_str)
+                # Add id if missing
+                if "id" not in item:
+                    item["id"] = hashlib.md5(
+                        (item.get("headline", "") + item.get("timestamp", "")).encode()
+                    ).hexdigest()[:12]
+                # Add sentiment if missing (default 0)
+                if "sentiment" not in item:
+                    item["sentiment"] = 0.0
+                items.append(item)
+            return items
+        except Exception:
+            return []
 
     @app.get("/api/veto-status")
     async def get_veto_status() -> dict:
@@ -449,22 +665,29 @@ def _trade_to_dict(t: Trade) -> dict:
         {
             "id": t.id,
             "symbol": t.symbol,
+            "side": t.direction,
             "direction": t.direction,
             "entry_price": t.entry_price,
             "exit_price": t.exit_price,
             "stop_loss": t.stop_loss,
             "take_profit": t.take_profit,
+            "quantity": t.lot_size,
             "lot_size": t.lot_size,
+            "opened_at": t.entry_time or t.created_at,
+            "closed_at": t.exit_time,
             "entry_time": t.entry_time,
             "exit_time": t.exit_time,
             "status": t.status,
             "pnl": t.pnl,
             "pnl_pips": t.pnl_pips,
+            "rr_ratio": t.rr_planned,
             "rr_planned": t.rr_planned,
             "rr_actual": t.rr_actual,
             "confidence": t.confidence,
+            "quality": t.trade_quality,
             "risk_pct": t.risk_pct,
             "ai_reasoning": t.ai_reasoning,
+            "ai_review": t.ai_review,
             "created_at": t.created_at,
         }
     )

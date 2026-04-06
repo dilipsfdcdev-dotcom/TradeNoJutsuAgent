@@ -40,7 +40,18 @@ function calculatePips(symbol: string, entry: number, current: number, side: 'bu
   return Math.round(diff * multiplier * 10) / 10;
 }
 
-export default function TradeCard({ trade }: TradeCardProps) {
+export default function TradeCard({ trade: raw }: TradeCardProps) {
+  // Ensure all numeric fields are valid numbers
+  const trade = {
+    ...raw,
+    entry_price: Number(raw.entry_price) || 0,
+    current_price: Number(raw.current_price) || 0,
+    sl: Number(raw.sl) || 0,
+    tp: Number(raw.tp) || 0,
+    pnl: Number(raw.pnl) || 0,
+    lots: Number(raw.lots) || 0,
+  };
+
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
