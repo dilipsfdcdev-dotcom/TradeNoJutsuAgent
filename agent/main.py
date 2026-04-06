@@ -482,7 +482,7 @@ async def _analyse_symbol(symbol: str) -> None:
         # Don't return — let Claude decide based on full context
 
     # =====================================================================
-    # v2 Step 3: Brain 1 -- XGBoost filter
+    # v2 Step 3: Brain 1 -- XGBoost filter (informational, does not block)
     # =====================================================================
     if mtf_state is not None and symbol in _xgb_filters:
         try:
@@ -493,16 +493,11 @@ async def _analyse_symbol(symbol: str) -> None:
             xgb_result = _xgb_filters[symbol].predict(features["xgb_features"])
             log.info("analysis.xgb_result", symbol=symbol,
                      score=xgb_result["score"], passed=xgb_result["pass"])
-            if not xgb_result["pass"]:
-                await _publish_v2_state(symbol, mtf_state=mtf_state,
-                                        xgb_result=xgb_result)
-                return
         except Exception:
             log.exception("analysis.xgb_error", symbol=symbol)
-            # On error, continue without XGBoost (graceful degradation)
 
     # =====================================================================
-    # v2 Step 4: Brain 2 -- LSTM confidence
+    # v2 Step 4: Brain 2 -- LSTM confidence (informational, does not block)
     # =====================================================================
     if mtf_state is not None and symbol in _lstm_models:
         try:
@@ -513,14 +508,8 @@ async def _analyse_symbol(symbol: str) -> None:
                          confidence=lstm_result["confidence"],
                          regime=lstm_result["regime"],
                          passed=lstm_result["pass"])
-                if not lstm_result["pass"]:
-                    await _publish_v2_state(symbol, mtf_state=mtf_state,
-                                            xgb_result=xgb_result,
-                                            lstm_result=lstm_result)
-                    return
         except Exception:
             log.exception("analysis.lstm_error", symbol=symbol)
-            # On error, continue without LSTM (graceful degradation)
 
     # =====================================================================
     # v2 Step 5: Circuit breaker
